@@ -1,13 +1,19 @@
 import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import httpx
 
 from media_bot.direct_providers import (
     allowed_media_url,
+    download_direct,
     facebook_media_urls,
     reddit_media_urls,
     tikwm_media_urls,
     x_media_urls,
     vx_media_urls,
 )
+from media_bot.links import parse_link
 from media_bot.x_card import normalize_vxtwitter
 
 
@@ -53,6 +59,30 @@ class DirectProviderTests(unittest.TestCase):
     def test_facebook_open_graph_photo(self):
         page = '<meta property="og:image" content="https://scontent.xx.fbcdn.net/photo.jpg">'
         self.assertEqual(facebook_media_urls(page, "/photos/abc/"), [("https://scontent.xx.fbcdn.net/photo.jpg", "photo")])
+
+
+class RedditDirectTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_legacy_json_has_short_timeout(self):
+        requests = []
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, url, **kwargs):
+                requests.append(kwargs)
+                return httpx.Response(403, request=httpx.Request("GET", url))
+
+        link = parse_link("https://www.reddit.com/r/test/comments/abc123/post/")
+        with patch("media_bot.direct_providers.httpx.AsyncClient", return_value=Client()):
+            count, _ = await download_direct(link, Path("unused"), 1024)
+        self.assertEqual(count, 0)
+        self.assertEqual(requests[0]["timeout"].connect, 1)
+        self.assertEqual(requests[0]["timeout"].read, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
