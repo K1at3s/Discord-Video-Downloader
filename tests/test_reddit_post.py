@@ -29,6 +29,8 @@ class RedditPostTests(unittest.TestCase):
         self.assertEqual(post.local_time, "12.11.2026 16:03")
         self.assertEqual(post.url, "https://www.reddit.com/r/opencode/comments/1xuc834/deepseek_v41_flash/")
         self.assertIsNone(_rss_post(xml, link, "Different post"))
+        self.assertIsNone(_rss_post("<html><body>Access denied</body></html>", link,
+                                 "DeepSeek V4.1 Flash"))
 
     def test_archive_requires_matching_post_and_subreddit(self):
         data = {"data": [{"id": "1xuc834", "subreddit": "opencode", "title": "Title",
@@ -42,6 +44,30 @@ class RedditPostTests(unittest.TestCase):
 
 
 class RedditArchiveFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_200_html_page_falls_back_to_archive(self):
+        seen = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            if request.url.host == "www.reddit.com":
+                return httpx.Response(200, text="<html>Login required</html>",
+                                      headers={"content-type": "text/html"})
+            if request.url.path == "/api/posts/ids":
+                return httpx.Response(200, json={"data": [{"id": "1xuc834",
+                    "subreddit": "opencode", "title": "Archived title", "selftext": "Archived body"}]})
+            return httpx.Response(503)
+
+        client_type = httpx.AsyncClient
+
+        def client_factory(**kwargs):
+            return client_type(transport=httpx.MockTransport(respond), **kwargs)
+
+        link = parse_link("https://www.reddit.com/r/opencode/comments/1xuc834/post/")
+        with patch("media_bot.reddit_post.httpx.AsyncClient", side_effect=client_factory):
+            post = await fetch_reddit_post(link)
+        self.assertEqual(post.body, "Archived body")
+        self.assertIn("/api/posts/ids", seen)
+
     async def test_short_link_resolves_through_archive_when_rss_is_unavailable(self):
         def respond(request: httpx.Request) -> httpx.Response:
             if request.url.host == "www.reddit.com":
