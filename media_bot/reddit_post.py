@@ -87,7 +87,10 @@ def _rss_post(xml: str, link: PostLink, title_hint: str | None) -> RedditPost | 
     if not subreddit:
         return None
     try:
-        entries = ET.fromstring(xml).findall(f"{ATOM}entry")
+        root = ET.fromstring(xml)
+        if root.tag != f"{ATOM}feed":
+            return None
+        entries = root.findall(f"{ATOM}entry")
     except ET.ParseError:
         return None
     title_key = " ".join(title_hint.split()).casefold() if title_hint else None
@@ -167,7 +170,8 @@ async def fetch_reddit_post(link: PostLink, title_hint: str | None = None) -> Re
                         if link.post_id else f"https://www.reddit.com/r/{subreddit}/new/.rss")
             response = await client.get(feed_url, params={} if link.post_id else {"limit": "100"})
             response.raise_for_status()
-            if len(response.content) <= 2_000_000:
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if content_type == "application/atom+xml" and len(response.content) <= 2_000_000:
                 post = _rss_post(response.text, link, title_hint)
                 if post:
                     return post
