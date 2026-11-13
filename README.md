@@ -13,7 +13,7 @@ Discord sohbetindeki sosyal medya bağlantılarını algılayıp medyayı ve eri
 | Reddit | Gönderi ve `/r/.../s/...` kısa bağlantısı | Metin koyu PNG sayfalarında; varsa medya ayrıca |
 | YouTube | Video, Shorts, canlı yayın bağlantısı | MP3, 360p, 720p, 1080p düğmeleri |
 | Spotify | Tekil parça | Eşleşen YouTube kaydından MP3, doğrudan dosya eki |
-| Threads | Gönderi ve `/share/` bağlantısı | `/share/` bağlantısını `COOKIE_FILE` içindeki oturumla gerçek gönderiye çözer; açık sayfanın JSON verisinden fotoğraf, video ve karusel alır. Çerez yoksa anonim çalışan web sağlayıcısı devreye girer ama `/share/` çözülemez. |
+| Threads | Gönderi ve `/share/` bağlantısı | Normal gönderileri önce çerezsiz `threadsdl` web sağlayıcısıyla indirir; gerekirse oturumlu sayfa çözümlemesini dener. `/share/` bağlantısını `COOKIE_FILE` içindeki oturumla gerçek gönderiye çözer; çerez olmadan bu kısa bağlantı biçimi çalışmayabilir. |
 | Douyin | Video, not | `yt-dlp` ve doğrudan sayfa yolları |
 | Weibo | Gönderi | `gallery-dl` ve `yt-dlp` |
 | Streamable | Video | Streamable API ve `yt-dlp` |

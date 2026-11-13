@@ -187,18 +187,8 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     providers = provider_order(link.platform, bool(cobalt_url), bool(gallery_rs_path))
     if link.platform == "threads":
         if re.search(r"/(?:share|t)/", link.url):
-            if not cookie_file:
-                # Test: try direct CDN extractor first for share links without
-                # a cookie file; no login needed for media fetch.
-                providers = ("vette",) + tuple(
-                    name for name in providers if name not in {"threads-page", "vette"}
-                )
-            else:
-                providers = tuple(name for name in providers if name != "threads-page")
-        elif cookie_file:
-            # A logged-in Threads session gives the post page directly, which is
-            # faster and does not mix the author's avatar into the result set.
-            providers = ("threads-page",) + tuple(name for name in providers if name != "threads-page")
+            # A short URL has no post page to parse until it is resolved.
+            providers = tuple(name for name in providers if name != "threads-page")
     failures: list[str] = []
     oversize = False
     private = False
@@ -313,6 +303,18 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
             await asyncio.to_thread(METRICS.record_winner, link.platform, result[1])
             return result
         providers = tuple(name for name in providers if name != "gallery-dl")
+    if link.platform == "threads" and "threadsdl" in providers:
+        # The provider race otherwise lets a faster logged-in page win even
+        # when the anonymous downloader works. Bound the first try so a slow
+        # hosted service cannot hold up the other routes indefinitely.
+        try:
+            result = await asyncio.wait_for(attempt("threadsdl"), timeout=12)
+        except asyncio.TimeoutError:
+            result = None
+        if result is not None:
+            await asyncio.to_thread(METRICS.record_winner, link.platform, result[1])
+            return result
+        providers = tuple(name for name in providers if name != "threadsdl")
     result = await first_success(providers, attempt, stagger=0)
     if result is not None:
         await asyncio.to_thread(METRICS.record_winner, link.platform, result[1])

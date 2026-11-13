@@ -1,8 +1,9 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from media_bot.download import _yt_dlp, looks_private, provider_order
+from media_bot.download import _yt_dlp, download_media, looks_private, provider_order
 from media_bot.links import PostLink
 
 
@@ -40,6 +41,27 @@ class ProviderOrderTests(unittest.TestCase):
 
 
 class ThreadsPluginRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cookie_free_threadsdl_wins_even_with_cookie_configured(self):
+        calls = []
+
+        async def fake_download(name, _link, folder, _max_bytes, _cookie_file):
+            calls.append(name)
+            (folder / "threadsdl_1.mp4").write_bytes(b"video")
+            return 1, ""
+
+        with tempfile.TemporaryDirectory() as temp:
+            link = PostLink("threads", "https://www.threads.com/@example/post/ABC123")
+            with (patch("media_bot.download.download_web", new=fake_download),
+                  patch("media_bot.download.first_success", side_effect=AssertionError("fallback ran")),
+                  patch("media_bot.download.BREAKERS.allow", return_value=True),
+                  patch("media_bot.download.BREAKERS.success"),
+                  patch("media_bot.download.METRICS.record"),
+                  patch("media_bot.download.METRICS.record_winner")):
+                files, provider = await download_media(link, Path(temp), 1024, cookie_file=Path("cookies.txt"))
+            self.assertEqual(provider, "threadsdl")
+            self.assertEqual(len(files), 1)
+            self.assertEqual(calls, ["threadsdl"])
+
     async def test_threads_keeps_all_video_entries(self):
         commands = []
 
