@@ -227,7 +227,8 @@ async def download_direct(link: PostLink, folder: Path, max_bytes: int) -> tuple
                 if not match:
                     return 0, "unsupported Reddit URL"
                 post_id = next(group for group in match.groups() if group)
-                response = await client.get(f"https://www.reddit.com/comments/{post_id}.json", params={"raw_json": "1"})
+                response = await client.get(f"https://www.reddit.com/comments/{post_id}.json",
+                                            params={"raw_json": "1"}, timeout=httpx.Timeout(2, connect=1))
                 response.raise_for_status()
                 payload = response.json()
                 data = payload[0]["data"]["children"][0]["data"]
