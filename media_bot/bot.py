@@ -12,17 +12,22 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import discord
+import httpx
 from dotenv import load_dotenv
 
 from .adult import AdultQuota, channel_is_nsfw, istanbul_day, reddit_adult_status
+from .bluesky import download_bluesky_media, fetch_bluesky_post
 from .captions import display_chunks, fetch_caption
 from .download import DownloadError, download_media
 from .links import PostLink, find_links, parse_link
+from .job_slots import JobSlots
 from .limits import attachment_batches
 from .metadata_fallback import Preview, fetch_preview, preview_embeds
+from .provider_metrics import METRICS
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
 from .spotify import fetch_track, find_audio_source
+from .threads_links import resolve_threads_link
 from .x_card import create_card, fetch_post
 from .youtube_view import YoutubeChoiceView
 from .youtube import download_youtube
@@ -31,38 +36,80 @@ LOG = logging.getLogger(__name__)
 COLORS = {"instagram": 0xC13584, "facebook": 0x1877F2, "reddit": 0xFF4500,
           "tiktok": 0x25F4EE, "youtube": 0xFF0033, "x": 0x20262E,
           "threads": 0x20262E, "douyin": 0x25F4EE, "weibo": 0xE6162D,
-          "streamable": 0x0F8FFA}
-
-
+          "streamable": 0x0F8FFA, "bluesky": 0x1083FE}
 def source_button(url: str) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=url))
     return view
 
 
+def _reel_caption(caption: str) -> tuple[str, str | None, str | None]:
+    """Split Instagram's "<text> - @user on <date>" tail into handle and date."""
+    match = re.search(r"\s*-\s*@([\w.]+)\s+on\s+(.+?)\s*$", caption, re.S)
+    if not match:
+        return caption.strip(), None, None
+    return caption[:match.start()].rstrip(), match.group(1), match.group(2).strip()
+
+
+def _quote(text: str) -> str:
+    """Bold every caption line inside a blockquote."""
+    return "\n".join("> **" + line + "**" if line else ">" for line in text.splitlines())
+
+
 def media_gallery_view(platform: str, files: list[Path], caption: str | None,
                        source_url: str, *, part: int = 1,
-                       show_missing_caption: bool = True) -> discord.ui.LayoutView:
+                       show_missing_caption: bool = True,
+                       descriptions: list[str] | None = None) -> discord.ui.LayoutView:
     label = {"instagram": "Instagram", "facebook": "Facebook", "reddit": "Reddit",
              "tiktok": "TikTok", "youtube": "YouTube", "x": "X", "threads": "Threads",
-             "douyin": "Douyin", "weibo": "Weibo", "streamable": "Streamable"}[platform]
+             "douyin": "Douyin", "weibo": "Weibo", "streamable": "Streamable",
+             "bluesky": "Bluesky"}[platform]
     heading = f"### {label} gönderisi" if part == 1 else f"### {label} gönderisi · {part}. bölüm"
     children: list[discord.ui.Item] = [discord.ui.TextDisplay(heading)]
     visual = [path for path in files if path.suffix.lower() != ".mp3"]
     audio = [path for path in files if path.suffix.lower() == ".mp3"]
+    if (platform == "instagram" and part == 1 and len(visual) == 1
+            and visual[0].suffix.lower() in {".mp4", ".mov", ".webm", ".m4v"}
+            and "/reel/" in urlsplit(source_url).path.lower()):
+        view = discord.ui.LayoutView(timeout=None)
+        view.add_item(discord.ui.MediaGallery(
+            discord.MediaGalleryItem(f"attachment://{visual[0].name}")
+        ))
+        details: list[discord.ui.Item] = [
+            discord.ui.TextDisplay("## Instagram Reel"),
+            discord.ui.Separator(),
+        ]
+        body, username, posted = _reel_caption(caption) if caption else ("", None, None)
+        if body:
+            details.append(discord.ui.TextDisplay(_quote(body[:3600])))
+        elif show_missing_caption:
+            details.append(discord.ui.TextDisplay("-# Gönderi açıklamasına erişilemiyor."))
+        meta = " · ".join(part for part in (
+            f"[@{username}](https://www.instagram.com/{username}/)" if username else "",
+            posted or "",
+        ) if part)
+        source = discord.ui.Button(label="Kaynak", emoji="🔗",
+                                   style=discord.ButtonStyle.link, url=source_url)
+        details.append(discord.ui.Section(discord.ui.TextDisplay("-# " + meta), accessory=source)
+                       if meta else discord.ui.ActionRow(source))
+        view.add_item(discord.ui.Container(*details, accent_color=COLORS[platform]))
+        return view
     if visual:
         children.append(discord.ui.MediaGallery(*(
-            discord.MediaGalleryItem(f"attachment://{path.name}") for path in visual
+            discord.MediaGalleryItem(
+                f"attachment://{path.name}",
+                description=(descriptions[index][:1024] or None) if descriptions and index < len(descriptions) else None,
+            ) for index, path in enumerate(visual)
         )))
     for path in audio:
         children.append(discord.ui.File(f"attachment://{path.name}"))
     if caption:
         children.append(discord.ui.Separator())
-        partial = platform == "facebook" and caption.rstrip().endswith(("...", "…"))
-        title = "Açıklama önizlemesi" if partial else "Açıklama"
-        children.append(discord.ui.TextDisplay(f"**{title}**\n{caption}"))
+        if platform == "facebook" and caption.rstrip().endswith(("...", "…")):
+            children.append(discord.ui.TextDisplay("-# Açıklama önizlemesi"))
+        children.append(discord.ui.TextDisplay(_quote(caption[:3600])))
     elif part == 1 and show_missing_caption:
-        children.append(discord.ui.TextDisplay("Gönderi açıklamasına erişilemiyor."))
+        children.append(discord.ui.TextDisplay("-# Gönderi açıklamasına erişilemiyor."))
     children.append(discord.ui.ActionRow(
         discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=source_url)
     ))
@@ -117,6 +164,7 @@ class MediaBot(discord.Client):
         self.upload_bytes = upload_bytes
         self.max_links = max_links
         self.jobs = asyncio.Semaphore(concurrency)
+        self.job_slots = JobSlots(self.jobs)
         self.cookie_file = cookie_file
         self.cobalt_url = cobalt_url
         self.cobalt_key = cobalt_key
@@ -132,34 +180,60 @@ class MediaBot(discord.Client):
         links = find_links(message.content, self.max_links)
         if not links:
             return
-        async with self.jobs:
-            for link in links:
+        queue_notice: discord.Message | None = None
+
+        async def on_wait() -> None:
+            nonlocal queue_notice
+            try:
+                queue_notice = await self._reply(message, "⏳ Sıradasın; bağlantın işlenecek.")
+            except discord.HTTPException:
+                pass
+
+        try:
+            async with self.job_slots.slot(message.author.id, on_wait):
+                if queue_notice:
+                    try:
+                        await queue_notice.edit(content="⏳ Bağlantın hazırlanıyor.")
+                    except discord.HTTPException:
+                        pass
+                for link in links:
+                    try:
+                        await self._handle_link(message, link)
+                    except discord.Forbidden:
+                        LOG.warning("Kanal için mesaj veya dosya gönderme izni yok: %s", message.channel.id)
+                        return
+                    except discord.HTTPException as exc:
+                        LOG.warning("Discord upload error: %s", exc)
+                        await self._reply(message, "Dosya Discord'a yüklenemedi. Kanal izinlerini ve yükleme sınırını kontrol edin.")
+                    except Exception:
+                        LOG.exception("Unexpected error processing %s", link.platform)
+                        await self._reply(message, "Bu bağlantı işlenirken beklenmeyen bir hata oluştu.")
+        finally:
+            if queue_notice:
                 try:
-                    await self._handle_link(message, link)
-                except discord.Forbidden:
-                    LOG.warning("Kanal için mesaj veya dosya gönderme izni yok: %s", message.channel.id)
-                    return
-                except discord.HTTPException as exc:
-                    LOG.warning("Discord upload error: %s", exc)
-                    await self._reply(message, "Dosya Discord'a yüklenemedi. Kanal izinlerini ve yükleme sınırını kontrol edin.")
-                except Exception:
-                    LOG.exception("Unexpected error processing %s", link.platform)
-                    await self._reply(message, "Bu bağlantı işlenirken beklenmeyen bir hata oluştu.")
+                    await queue_notice.delete()
+                except discord.HTTPException:
+                    pass
 
     async def _reply(self, message: discord.Message, content: str = "", files: list[Path] | None = None,
-                     *, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> None:
+                     *, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> discord.Message:
         with ExitStack() as stack:
             attachments = []
             for path in files or []:
                 attachment = discord.File(path, filename=path.name)
                 stack.callback(attachment.close)
                 attachments.append(attachment)
-            await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
-                                mention_author=False, suppress_embeds=embed is None)
+            return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
+                                       mention_author=False, suppress_embeds=embed is None)
 
     async def _handle_link(self, message: discord.Message, link: PostLink) -> None:
+        if link.platform == "threads":
+            link = await resolve_threads_link(link, self.cookie_file) or link
         if link.platform == "spotify":
             await self._handle_spotify(message, link)
+            return
+        if link.platform == "bluesky":
+            await self._handle_bluesky(message, link)
             return
         if link.platform == "reddit":
             await self._handle_reddit(message, link)
@@ -172,6 +246,14 @@ class MediaBot(discord.Client):
             await self._handle_x(message, link)
             return
         caption_task = asyncio.create_task(fetch_caption(link, self.cookie_file))
+
+        async def caption_or_none() -> str | None:
+            try:
+                return await caption_task
+            except Exception:
+                LOG.exception("Caption unavailable for %s", link.platform)
+                return None
+
         with tempfile.TemporaryDirectory(prefix="discord-media-") as tmp:
             folder = Path(tmp)
             media: list[Path] = []
@@ -180,8 +262,13 @@ class MediaBot(discord.Client):
                 media, _ = await download_media(link, folder, self.upload_bytes, self.cookie_file, self.cobalt_url, self.cobalt_key, self.gallery_rs_path)
             except DownloadError as exc:
                 error = exc
+            except BaseException:
+                if not caption_task.done():
+                    caption_task.cancel()
+                await asyncio.gather(caption_task, return_exceptions=True)
+                raise
             if not media:
-                caption = await caption_task
+                caption = await caption_or_none()
                 preview = await self._reddit_message_preview(message, link) if link.platform == "reddit" else Preview()
                 if not preview.has_content:
                     preview = await fetch_preview(link)
@@ -189,10 +276,13 @@ class MediaBot(discord.Client):
                     for embed in preview_embeds(link, preview, caption):
                         await self._reply(message, embed=embed, view=source_button(link.url))
                 else:
-                    await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
+                    if link.platform == "threads" and re.search(r"/(?:share|t)/", link.url):
+                        await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
+                    else:
+                        await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
                 return
             try:
-                caption = await caption_task
+                caption = await caption_or_none()
                 chunks = display_chunks(caption)
                 for index, chunk in enumerate(attachment_batches(media)):
                     view = media_gallery_view(link.platform, chunk,
@@ -221,6 +311,50 @@ class MediaBot(discord.Client):
             if preview.has_content:
                 return preview
         return Preview()
+
+    async def _handle_bluesky(self, message: discord.Message, link: PostLink) -> None:
+        try:
+            post = await fetch_bluesky_post(link)
+        except httpx.HTTPError as exc:
+            LOG.warning("Bluesky API unavailable: %s", exc)
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            text = ("Bluesky hız sınırına ulaştı; kısa süre sonra tekrar dene." if status == 429 else
+                    "Bluesky gönderisi bulunamadı veya erişim engellendi." if status in {400, 401, 403, 404} else
+                    "Bluesky gönderisi şu anda alınamadı.")
+            await self._reply(message, text, view=source_button(link.url))
+            return
+        if post is None:
+            await self._reply(message, "Bluesky gönderisi bulunamadı.", view=source_button(link.url))
+            return
+        if post.adult:
+            if not channel_is_nsfw(message.channel):
+                await self._reply(message, "+18 Bluesky gönderileri yalnızca NSFW kanallarda kullanılabilir.")
+                return
+            if not await self.adult_quota.aclaim(message.author.id, istanbul_day()):
+                await self._reply(message, "Günlük +18 indirme hakkını kullandın.")
+                return
+        with tempfile.TemporaryDirectory(prefix="discord-bluesky-") as tmp:
+            try:
+                media = await download_bluesky_media(post, Path(tmp), self.upload_bytes)
+            except OSError as exc:
+                LOG.warning("Bluesky media unavailable: %s", exc)
+                media = []
+            caption = post.caption
+            if post.media and not media:
+                caption += "\n\nMedya indirilemedi."
+            chunks = display_chunks(caption) or [""]
+            batches = list(attachment_batches(media)) or [[]]
+            for index, batch in enumerate(batches):
+                await self._reply(message, files=batch,
+                                  view=media_gallery_view("bluesky", batch,
+                                                          chunks[0] if index == 0 else None,
+                                                          link.url, part=index + 1,
+                                                          show_missing_caption=False,
+                                                          descriptions=list(post.alt_texts[index * 10:(index + 1) * 10])))
+            for index, chunk in enumerate(chunks[1:], len(batches) + 1):
+                await self._reply(message, view=media_gallery_view("bluesky", [], chunk,
+                                                                   link.url, part=index,
+                                                                   show_missing_caption=False))
 
     async def _handle_reddit(self, message: discord.Message, link: PostLink) -> None:
         preview = (await self._reddit_message_preview(message, link)
@@ -389,6 +523,8 @@ def main() -> None:
         gallery_rs_path = Path(rs_raw).resolve() if rs_raw else None
         if gallery_rs_path and not gallery_rs_path.is_file():
             raise ValueError("GALLERY_DL_RS_PATH mevcut bir programı göstermeli")
+        database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
+        METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
         bot = MediaBot(
             channel_ids=channels,
             upload_bytes=_positive_int("MAX_UPLOAD_MB", 20, 500) * 1024 * 1024,
@@ -398,7 +534,7 @@ def main() -> None:
             cobalt_url=cobalt_url,
             cobalt_key=os.getenv("COBALT_API_KEY", "").strip() or None,
             gallery_rs_path=gallery_rs_path,
-            database_path=Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve(),
+            database_path=database_path,
         )
     except ValueError as exc:
         raise SystemExit(f"Yapılandırma hatası: {exc}") from exc

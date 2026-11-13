@@ -54,7 +54,7 @@ class YoutubeDownloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(commands[0][commands[0].index("--extractor-args") + 1],
                             commands[1][commands[1].index("--extractor-args") + 1])
 
-    async def test_format_reserves_audio_space_and_enables_ejs(self):
+    async def test_format_reserves_audio_space_without_remote_ejs_by_default(self):
         commands = []
 
         async def fake_run(command, **_kwargs):
@@ -62,14 +62,26 @@ class YoutubeDownloadTests(unittest.IsolatedAsyncioTestCase):
             return 0, ""
 
         link = PostLink("youtube", "https://www.youtube.com/watch?v=TeJzEnHCIWY", "TeJzEnHCIWY")
-        with patch("media_bot.youtube._run", new=fake_run):
+        with patch("media_bot.youtube._run", new=fake_run), patch.dict("os.environ", {"YTDLP_REMOTE_EJS": "0"}):
             await _yt_dlp(link, Path("unused"), "720", 20 * 1024 * 1024, None)
         command = commands[0]
-        self.assertEqual(command[command.index("--remote-components") + 1], "ejs:github")
+        self.assertNotIn("--remote-components", command)
         formats = command[command.index("-f") + 1]
         self.assertIn("[filesize<15728640]", formats)
         self.assertIn("[filesize<5242880]", formats)
         self.assertIn("[height<=720]", formats)
+
+    async def test_remote_ejs_requires_explicit_setting(self):
+        commands = []
+
+        async def fake_run(command, **_kwargs):
+            commands.append(command)
+            return 0, ""
+
+        link = PostLink("youtube", "https://www.youtube.com/watch?v=TeJzEnHCIWY", "TeJzEnHCIWY")
+        with patch("media_bot.youtube._run", new=fake_run), patch.dict("os.environ", {"YTDLP_REMOTE_EJS": "1"}):
+            await _yt_dlp(link, Path("unused"), "720", 20 * 1024 * 1024, None)
+        self.assertEqual(commands[0][commands[0].index("--remote-components") + 1], "ejs:github")
 
 
 if __name__ == "__main__":

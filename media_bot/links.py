@@ -65,6 +65,10 @@ def parse_link(raw: str) -> PostLink | None:
     elif _host(host, "threads.com") or _host(host, "threads.net"):
         if re.fullmatch(r"/@[^/]+/post/[A-Za-z0-9_-]+(?:/media)?/?", path) or re.fullmatch(r"/(?:t|share)/[A-Za-z0-9_-]+/?", path):
             return PostLink("threads", clean)
+    elif host == "bsky.app":
+        match = re.fullmatch(r"/profile/([A-Za-z0-9.:-]+)/post/([A-Za-z0-9]+)/*", path)
+        if match:
+            return PostLink("bluesky", f"https://bsky.app/profile/{match.group(1)}/post/{match.group(2)}", match.group(2))
     elif _host(host, "douyin.com"):
         if re.fullmatch(r"/(?:video|note)/\d+/?", path) or (host.startswith("v.") and re.fullmatch(r"/[A-Za-z0-9]+/?", path)):
             return PostLink("douyin", clean)

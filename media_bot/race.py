@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar
 
 T = TypeVar("T")
+LOG = logging.getLogger(__name__)
 
 
 async def first_success(names: Sequence[str], attempt: Callable[[str], Awaitable[T | None]],
@@ -17,7 +19,11 @@ async def first_success(names: Sequence[str], attempt: Callable[[str], Awaitable
         if index:
             await asyncio.sleep(index * stagger)
         async with slots:
-            return await attempt(name)
+            try:
+                return await attempt(name)
+            except Exception:
+                LOG.exception("Provider attempt %s raised unexpectedly", name)
+                return None
 
     tasks = [asyncio.create_task(run(index, name)) for index, name in enumerate(names)]
     try:

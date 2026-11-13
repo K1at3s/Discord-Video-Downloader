@@ -12,6 +12,38 @@ from media_bot.limits import attachment_batches
 
 
 class MediaBatchTests(unittest.TestCase):
+    def test_instagram_reel_places_video_above_compact_caption_card(self):
+        url = "https://www.instagram.com/reel/Example123/"
+        view = media_gallery_view("instagram", [Path("reel.mp4")],
+                                  "İlk satır\n#ikinci - @user on November 11, 2026", url)
+        gallery, details = view.to_components()
+        self.assertEqual(gallery["type"], 12)
+        self.assertEqual(gallery["items"][0]["media"]["url"], "attachment://reel.mp4")
+        self.assertEqual(details["type"], 17)
+        header, separator, body, footer = details["components"]
+        self.assertEqual(header["content"], "## Instagram Reel")
+        self.assertEqual(separator["type"], 14)
+        self.assertEqual(body["content"], "> **İlk satır**\n> **#ikinci**")
+        self.assertEqual(footer["components"][0]["content"],
+                         "-# [@user](https://www.instagram.com/user/) · November 11, 2026")
+        self.assertEqual(footer["accessory"]["url"], url)
+
+
+    def test_instagram_reel_without_author_keeps_plain_caption(self):
+        view = media_gallery_view("instagram", [Path("reel.mp4")], "Sadece açıklama",
+                                  "https://www.instagram.com/reel/Example123/")
+        _, details = view.to_components()
+        self.assertEqual([item["type"] for item in details["components"]], [10, 14, 10, 1])
+        self.assertEqual(details["components"][2]["content"], "> **Sadece açıklama**")
+        self.assertEqual(details["components"][3]["components"][0]["url"],
+                         "https://www.instagram.com/reel/Example123/")
+
+    def test_instagram_photo_carousel_keeps_one_gallery(self):
+        files = [Path("first.jpg"), Path("second.jpg")]
+        view = media_gallery_view("instagram", files, "Açıklama", "https://www.instagram.com/p/Example123/")
+        components = view.to_components()[0]["components"]
+        self.assertEqual(len(components[1]["items"]), 2)
+
     def test_two_photos_and_caption_share_one_gallery(self):
         files = [Path("first.jpg"), Path("second.jpg")]
         view = media_gallery_view("facebook", files, "Tam açıklama", "https://facebook.com/posts/1")

@@ -6,23 +6,28 @@ their responses in separate provider directories and reject partial albums.
 
 from __future__ import annotations
 
+import asyncio
 import html
+import json
 import logging
 import re
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
 from .direct_providers import _stream, _suffix, allowed_media_url
 from .links import PostLink
 from .limits import MAX_MEDIA_ITEMS
+from .threads_links import CONTENT_HEADERS, _threads_cookies
+from .video_fit import fit_video
 
 LOG = logging.getLogger(__name__)
 AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36"
 BTCH_BASE = "https://btch-downloader-api-green.vercel.app"
 VETTE_BASE = "https://www.socialdownloader.space"
+THREADS_BASE = "https://threadsphotodownloader.com"
 
 
 class _MediaHTML(HTMLParser):
@@ -91,6 +96,105 @@ def _tiktokio_urls(markup: str) -> list[tuple[str, str]]:
     return [(url, "video") for url in candidates if allowed_media_url(url, "tiktokio")][:1]
 
 
+def _embed_media(markup: str) -> list[tuple[str, str]]:
+    """Read the full media list from the embed page's escaped contextJSON."""
+    match = re.search(r'"contextJSON":"((?:[^"\\]|\\.)*)"', markup)
+    if not match:
+        return []
+    try:
+        media = json.loads(json.loads('"' + match.group(1) + '"'))["gql_data"]["shortcode_media"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    children = (media.get("edge_sidecar_to_children") or {}).get("edges") or []
+    nodes = [edge.get("node") for edge in children if isinstance(edge, dict)] or [media]
+    found: list[tuple[str, str]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            return []
+        url = node.get("video_url") if node.get("is_video") else node.get("display_url")
+        if not isinstance(url, str) or not allowed_media_url(url, "instagram"):
+            return []  # a partial album is not worth winning the race with
+        found.append((url, "video" if node.get("is_video") else "photo"))
+        if len(found) == MAX_MEDIA_ITEMS:
+            break
+    return found
+
+
+def _threads_page_urls(markup: str, post_id: str) -> list[tuple[str, str]]:
+    """Extract every item of the requested Threads post from page JSON."""
+    found: list[tuple[str, str]] = []
+
+    def visit(value: object, depth: int = 0) -> bool:
+        if depth > 40:
+            return False
+        if isinstance(value, list):
+            return any(visit(item, depth + 1) for item in value)
+        if not isinstance(value, dict):
+            return False
+        if value.get("code") == post_id and any(key in value for key in
+                                                ("image_versions2", "video_versions", "carousel_media")):
+            items = value.get("carousel_media") or [value]
+            if not isinstance(items, list) or len(items) > MAX_MEDIA_ITEMS:
+                return False
+            candidate: list[tuple[str, str]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    return False
+                videos = item.get("video_versions") or []
+                images = (item.get("image_versions2") or {}).get("candidates") or []
+                if isinstance(videos, list) and videos:
+                    url = next((v.get("url") for v in videos if isinstance(v, dict) and
+                                isinstance(v.get("url"), str)), None)
+                    kind = "video"
+                elif isinstance(images, list) and images:
+                    valid = [i for i in images if isinstance(i, dict) and isinstance(i.get("url"), str)]
+                    best = max(valid, key=lambda i: (i.get("width") if isinstance(i.get("width"), int) else 0) *
+                               (i.get("height") if isinstance(i.get("height"), int) else 0),
+                               default=None)
+                    url = best.get("url") if best else None
+                    kind = "photo"
+                else:
+                    return False
+                if not url or not allowed_media_url(url, "threads"):
+                    return False
+                candidate.append((url, kind))
+            found.extend(candidate)
+            return bool(found)
+        return any(visit(item, depth + 1) for item in value.values())
+
+    for match in re.finditer(r'<script\b[^>]*\btype=["\']application/json["\'][^>]*>(.*?)</script>',
+                             markup, re.I | re.S):
+        try:
+            if visit(json.loads(match.group(1))):
+                return found
+        except (ValueError, TypeError):
+            continue
+        found.clear()
+    return []
+
+
+def _threadsdl_urls(markup: str) -> list[tuple[str, str]]:
+    """Undo the download site's proxy prefix to reach the original CDN URL."""
+    found: list[tuple[str, str]] = []
+    for match in re.finditer(r'<(img|video)\b[^>]*\bsrc="([^"]+)"', markup, re.I):
+        proxied = html.unescape(match.group(2))
+        parts = urlsplit(proxied)
+        if (parts.hostname or "").lower() != "cdn.threadsphotodownloader.com":
+            continue
+        host, _, path = parts.path.lstrip("/").partition("/")
+        direct = urlunsplit(("https", host, "/" + path, parts.query, ""))
+        if not allowed_media_url(direct, "threads"):
+            continue
+        # The site lists the author's avatar next to the post media; those URLs
+        # use Instagram's profile-picture path types (-19 and t1.*-9).
+        if re.search(r"(?:t51\.\d+-19|t1\.\d+-9)/", path):
+            continue
+        found.append((direct, "video" if match.group(1).lower() == "video" else "photo"))
+        if len(found) == MAX_MEDIA_ITEMS:
+            break
+    return found
+
+
 def _rapidsave_url(markup: str) -> str | None:
     parser = _MediaHTML()
     parser.feed(markup)
@@ -146,12 +250,86 @@ def _vette_urls(payload: dict, platform: str) -> list[tuple[str, str]]:
     return [(f"{VETTE_BASE}{video}" if not parsed.netloc else video, "video")]
 
 
-async def download_web(name: str, link: PostLink, folder: Path, max_bytes: int) -> tuple[int, str]:
+async def download_web(name: str, link: PostLink, folder: Path, max_bytes: int,
+                       cookie_file: Path | None = None) -> tuple[int, str]:
     """Extract then stream a complete set; a partial set never wins the race."""
     try:
+        # Some networks drop roughly half of the TLS handshakes to these hosts,
+        # so a fresh connection usually succeeds where the first one failed.
         async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5), follow_redirects=False,
-                                     trust_env=False, headers={"User-Agent": AGENT}) as client:
-            if name == "indown" and link.platform == "instagram":
+                                     trust_env=False, headers={"User-Agent": AGENT},
+                                     cookies=_threads_cookies(cookie_file) if name == "threads-page" else None,
+                                     transport=httpx.AsyncHTTPTransport(retries=3)) as client:
+            if name == "embed" and link.platform == "instagram":
+                # Instagram serves the login wall to desktop-browser UAs and the
+                # public media JSON to short/bot UAs, exactly like the download sites.
+                response = await client.get(link.url.rstrip("/") + "/embed/",
+                                            headers={"User-Agent": "Mozilla/5.0"})
+                response.raise_for_status()
+                if "This account is private" in response.text or "is_private\":true" in response.text:
+                    return 0, "login required: private account"
+                urls = _embed_media(response.text)
+                source = "instagram"
+            elif name == "threads-page" and link.platform == "threads" and re.search(r"/post/([A-Za-z0-9_-]+)", link.url):
+                response = await client.get(link.url.split("?")[0], headers=CONTENT_HEADERS)
+                if response.is_redirect and "/login/" in response.headers.get("location", ""):
+                    return 0, "login required"
+                response.raise_for_status()
+                post_id = re.search(r"/post/([A-Za-z0-9_-]+)", link.url).group(1)
+                urls = _threads_page_urls(response.text, post_id)
+                source = "threads"
+            elif name == "threadsdl" and link.platform == "threads":
+                # This site renders the post server-side, unlike threads.com
+                # itself which redirects anonymous visitors to /login/.
+                form = None
+                for attempt in range(4):
+                    try:
+                        form = await client.get(THREADS_BASE + "/")
+                        break
+                    except httpx.ConnectError:
+                        if attempt == 3:
+                            raise
+                        await asyncio.sleep(attempt + 1)
+                form.raise_for_status()
+                token = re.search(r'name="authenticity_token" value="([^"]+)"', form.text)
+                if not token:
+                    return 0, "no form token"
+                job = None
+                for attempt in range(4):
+                    try:
+                        job = await client.post(
+                            THREADS_BASE + "/download",
+                            data={"authenticity_token": token.group(1), "url": link.url.split("?")[0]},
+                            headers={"Referer": THREADS_BASE + "/", "Origin": THREADS_BASE},
+                        )
+                        break
+                    except httpx.ConnectError:
+                        if attempt == 3:
+                            raise
+                        await asyncio.sleep(attempt + 1)
+                location = job.headers.get("location") or ""
+                if job.is_redirect and "/download/" in location:
+                    job_url = urljoin(THREADS_BASE + "/", location).rstrip("/")
+                elif "/download/" in job.url.path:
+                    job_url = str(job.url).rstrip("/")
+                else:
+                    return 0, "post media unavailable"
+                urls = []
+                for _ in range(8):
+                    try:
+                        status = await client.get(job_url + "/status",
+                                                  headers={"Turbo-Frame": "media_resolution"})
+                    except httpx.ConnectError:
+                        # The network sometimes drops every handshake to this
+                        # host for a few seconds; the next poll usually works.
+                        await asyncio.sleep(1.5)
+                        continue
+                    urls = _threadsdl_urls(status.text)
+                    if urls or "retrieve media" in status.text:
+                        break
+                    await asyncio.sleep(1.5)
+                source = "threads"
+            elif name == "indown" and link.platform == "instagram":
                 response = await client.post("https://indown.net/api/ajaxSearch",
                     data={"q": link.url.split("?")[0], "vt": "reel", "t": "media", "lang": "en", "v": "v2"},
                     headers={"X-Requested-With": "XMLHttpRequest", "Origin": "https://indown.net", "Referer": "https://indown.net/"})
@@ -210,10 +388,18 @@ async def download_web(name: str, link: PostLink, folder: Path, max_bytes: int) 
                     return 0, "untrusted media host"
                 suffix_url = parse_qs(urlsplit(url).query).get("url", [url])[0] if name == "vette" else url
                 output = folder / f"{name}_{index}{_suffix(suffix_url, kind)}"
-                if await _stream(client, url, source, output, max_bytes):
+                if kind == "video" and link.platform == "instagram":
+                    raw = folder / f"{name}_{index}_raw.mp4"
+                    try:
+                        if await _stream(client, url, source, raw, min(max_bytes * 4, 200 * 1024 * 1024)):
+                            if await fit_video(raw, output, max_bytes):
+                                count += 1
+                    finally:
+                        raw.unlink(missing_ok=True)
+                elif await _stream(client, url, source, output, max_bytes):
                     count += 1
             if count != len(urls):
-                return 0, f"incomplete gallery ({count}/{len(urls)})"
+                return 0, f"incomplete gallery ({count}/{len(urls)}); media may exceed upload limit"
             return count, ""
     except (httpx.HTTPError, ValueError, TypeError, KeyError, OSError) as exc:
         LOG.info("Web provider %s failed for %s: %s", name, link.platform, exc)

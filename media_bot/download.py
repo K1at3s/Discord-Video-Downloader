@@ -7,20 +7,31 @@ import logging
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+from .circuit_breaker import BREAKERS, provider_fault
 from .cobalt import download_cobalt
+from .cookiefile import netscape_jar
 from .direct_providers import canonical_facebook_post, download_direct, download_vxtwitter
 from .gendownload import download_gendownload
 from .links import PostLink
 from .limits import MAX_MEDIA_ITEMS
 from .race import first_success
+from .provider_metrics import METRICS
 from .web_providers import download_web
 
 LOG = logging.getLogger(__name__)
 MEDIA_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
 PROCESS_TIMEOUT = 150
 NO_MEDIA_RESULTS = {"no usable media", "no uploadable media"}
+PRIVATE_HINTS = ("login", "private", "authrequired")
+
+
+def looks_private(error: str) -> bool:
+    """Providers say "login required" / "private" when the account is not public."""
+    lowered = error.lower()
+    return any(hint in lowered for hint in PRIVATE_HINTS)
 
 
 class DownloadError(Exception):
@@ -73,12 +84,14 @@ async def _run(command: list[str], timeout: int = PROCESS_TIMEOUT, folder: Path 
 
 
 def _cookies(cookie_file: Path | None) -> list[str]:
-    return ["--cookies", str(cookie_file)] if cookie_file else []
+    jar = netscape_jar(cookie_file)
+    return ["--cookies", str(jar)] if jar else []
 
 
 async def _yt_dlp(link: PostLink, folder: Path, max_bytes: int, cookie_file: Path | None) -> tuple[int, str]:
     command = [
-        sys.executable, "-m", "yt_dlp", "--no-config", "--no-playlist",
+        sys.executable, "-m", "yt_dlp", "--no-config",
+        "--yes-playlist" if link.platform == "threads" else "--no-playlist",
         "--playlist-end", str(MAX_MEDIA_ITEMS), "--max-filesize", str(max_bytes),
         "--socket-timeout", "15", "--retries", "2", "--fragment-retries", "2",
         "--restrict-filenames", "--no-write-info-json", "--no-write-thumbnail",
@@ -86,7 +99,7 @@ async def _yt_dlp(link: PostLink, folder: Path, max_bytes: int, cookie_file: Pat
         "-o", str(folder / "%(id)s_%(playlist_index)s.%(ext)s"),
         *_cookies(cookie_file), link.url,
     ]
-    return await _run(command)
+    return await _run(command, folder=folder, max_total_bytes=max_bytes * MAX_MEDIA_ITEMS)
 
 
 async def _gallery_dl(link: PostLink, folder: Path, max_bytes: int, cookie_file: Path | None) -> tuple[int, str]:
@@ -95,17 +108,20 @@ async def _gallery_dl(link: PostLink, folder: Path, max_bytes: int, cookie_file:
         "--range", f"1-{MAX_MEDIA_ITEMS}", "--filesize-max", str(max_bytes),
         "--no-mtime", *_cookies(cookie_file), link.url,
     ]
-    return await _run(command)
+    return await _run(command, folder=folder, max_total_bytes=max_bytes * MAX_MEDIA_ITEMS)
 
 
-async def _instaloader(link: PostLink, folder: Path, max_bytes: int) -> tuple[int, str]:
+async def _instaloader(link: PostLink, folder: Path, max_bytes: int,
+                       cookie_file: Path | None = None) -> tuple[int, str]:
     shortcode = link.url.rstrip("/").split("/")[-1]
     command = [
         sys.executable, "-m", "instaloader", "--dirname-pattern", str(folder),
         "--no-captions", "--no-metadata-json", "--no-video-thumbnails",
         "--max-connection-attempts", "1", "--request-timeout", "15",
-        "--", "-" + shortcode,
     ]
+    if jar := netscape_jar(cookie_file):
+        command += ["--cookiefile", str(jar)]
+    command += ["--", "-" + shortcode]
     return await _run(command, folder=folder, max_total_bytes=max_bytes * MAX_MEDIA_ITEMS)
 
 
@@ -114,19 +130,19 @@ async def _you_get(link: PostLink, folder: Path, max_bytes: int) -> tuple[int, s
     return await _run(command, timeout=120, folder=folder, max_total_bytes=max_bytes * MAX_MEDIA_ITEMS)
 
 
-async def _gallery_rs(link: PostLink, folder: Path, cookie_file: Path | None, executable: Path) -> tuple[int, str]:
+async def _gallery_rs(link: PostLink, folder: Path, max_bytes: int, cookie_file: Path | None, executable: Path) -> tuple[int, str]:
     command = [str(executable), "--extractor", "native", "--native-config-ignore", "-d", str(folder)]
-    if cookie_file:
-        command += ["-C", str(cookie_file)]
+    if jar := netscape_jar(cookie_file):
+        command += ["-C", str(jar)]
     command.append(link.url)
-    return await _run(command)
+    return await _run(command, folder=folder, max_total_bytes=max_bytes * MAX_MEDIA_ITEMS)
 
 
 def provider_order(platform: str, cobalt_enabled: bool = False, gallery_rs_enabled: bool = False) -> tuple[str, ...]:
     if platform not in {"instagram", "facebook", "reddit", "x", "tiktok", "threads", "douyin", "weibo", "streamable"}:
         raise ValueError("Desteklenmeyen platform")
     if platform == "instagram":
-        providers = ("indown", "vette", "gendownload", "gallery-dl", "yt-dlp", "instaloader")
+        providers = ("embed", "indown", "vette", "gendownload", "gallery-dl", "yt-dlp", "instaloader")
     elif platform == "tiktok":
         providers = ("direct", "gendownload", "yt-dlp", "gallery-dl")
     elif platform == "facebook":
@@ -134,7 +150,7 @@ def provider_order(platform: str, cobalt_enabled: bool = False, gallery_rs_enabl
     elif platform == "x":
         providers = ("direct", "gendownload", "gallery-dl", "yt-dlp")
     elif platform == "threads":
-        providers = ("vette",)
+        providers = ("threadsdl", "threads-page", "yt-dlp", "vette")
     elif platform == "douyin":
         providers = ("yt-dlp", "direct")
     elif platform == "weibo":
@@ -142,7 +158,9 @@ def provider_order(platform: str, cobalt_enabled: bool = False, gallery_rs_enabl
     elif platform == "streamable":
         providers = ("direct", "yt-dlp")
     else:
-        providers = ("direct", "gallery-dl", "yt-dlp", "vette")
+        # Reddit's anonymous .json endpoint frequently returns 403; try the
+        # video services first and leave JSON as a last-resort legacy route.
+        providers = ("rapidsave", "vette", "gallery-dl", "yt-dlp", "direct")
     if cobalt_enabled and platform in {"instagram", "facebook", "reddit", "x", "tiktok", "streamable"}:
         providers = providers[:1] + ("cobalt",) + providers[1:]
     if platform == "x":
@@ -151,8 +169,6 @@ def provider_order(platform: str, cobalt_enabled: bool = False, gallery_rs_enabl
         providers += ("you-get",)
     elif platform == "tiktok":
         providers += ("tiktokio", "btch")
-    elif platform == "reddit":
-        providers += ("rapidsave",)
     if gallery_rs_enabled and platform in {"instagram", "facebook", "reddit", "x", "tiktok", "threads", "weibo"}:
         providers += ("gallery-dl-rs",)
     return providers
@@ -169,19 +185,41 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     if canonical:
         link = canonical
     providers = provider_order(link.platform, bool(cobalt_url), bool(gallery_rs_path))
+    if link.platform == "threads":
+        if re.search(r"/(?:share|t)/", link.url):
+            if not cookie_file:
+                # Test: try direct CDN extractor first for share links without
+                # a cookie file; no login needed for media fetch.
+                providers = ("vette",) + tuple(
+                    name for name in providers if name not in {"threads-page", "vette"}
+                )
+            else:
+                providers = tuple(name for name in providers if name != "threads-page")
+        elif cookie_file:
+            # A logged-in Threads session gives the post page directly, which is
+            # faster and does not mix the author's avatar into the result set.
+            providers = ("threads-page",) + tuple(name for name in providers if name != "threads-page")
     failures: list[str] = []
     oversize = False
+    private = False
     async def attempt(name: str) -> tuple[list[Path], str] | None:
-        nonlocal oversize
+        nonlocal oversize, private
+        started = time.monotonic()
+        if not BREAKERS.allow(name, link.platform):
+            LOG.info("Skipping %s for %s during provider cooldown", name, link.platform)
+            await asyncio.to_thread(METRICS.record, link.platform, name, "skipped", 0)
+            failures.append(f"{name} (cooldown)")
+            return None
         target = folder / name
-        target.mkdir(parents=True, exist_ok=True)
+        reported = False
         try:
+            target.mkdir(parents=True, exist_ok=True)
             if name == "gallery-dl":
                 code, error = await _gallery_dl(link, target, max_bytes, cookie_file)
             elif name == "yt-dlp":
                 code, error = await _yt_dlp(link, target, max_bytes, cookie_file)
             elif name == "instaloader":
-                code, error = await _instaloader(link, target, max_bytes)
+                code, error = await _instaloader(link, target, max_bytes, cookie_file)
             elif name == "direct":
                 try:
                     count, error = await asyncio.wait_for(download_direct(link, target, max_bytes), timeout=150)
@@ -189,7 +227,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 except asyncio.TimeoutError:
                     code, error = -1, "zaman aşımı"
             elif name == "gallery-dl-rs":
-                code, error = await _gallery_rs(link, target, cookie_file, gallery_rs_path)
+                code, error = await _gallery_rs(link, target, max_bytes, cookie_file, gallery_rs_path)
             elif name == "you-get":
                 code, error = await _you_get(link, target, max_bytes)
             elif name == "gendownload":
@@ -204,9 +242,9 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                     code = 0 if count else 1
                 except asyncio.TimeoutError:
                     code, error = -1, "zaman aşımı"
-            elif name in {"indown", "tiktokio", "rapidsave", "btch", "vette"}:
+            elif name in {"indown", "tiktokio", "rapidsave", "btch", "vette", "embed", "threads-page", "threadsdl"}:
                 try:
-                    count, error = await asyncio.wait_for(download_web(name, link, target, max_bytes), timeout=90)
+                    count, error = await asyncio.wait_for(download_web(name, link, target, max_bytes, cookie_file), timeout=90)
                     code = 0 if count else 1
                 except asyncio.TimeoutError:
                     code, error = -1, "zaman aşımı"
@@ -218,18 +256,53 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                     code, error = -1, "zaman aşımı"
             files = media_files(target, max_bytes)
             if files and code == 0:
+                BREAKERS.success(name, link.platform)
+                reported = True
+                await asyncio.to_thread(METRICS.record, link.platform, name, "success", int((time.monotonic() - started) * 1000))
                 LOG.info("Downloaded %s using %s (%d files)", link.platform, name, len(files))
                 return files, name
+            fault = provider_fault(error)
+            opened = BREAKERS.failure(name, link.platform) if fault else None
+            if opened is None:
+                BREAKERS.neutral(name, link.platform)
+            elif opened:
+                LOG.warning("Provider cooldown opened: %s/%s", name, link.platform)
+            reported = True
             if any(p.is_file() and p.suffix.lower() in MEDIA_SUFFIXES and p.stat().st_size > max_bytes for p in target.rglob("*")):
                 oversize = True
             if not error or error.strip().lower() in NO_MEDIA_RESULTS:
                 LOG.info("%s found no media for %s", name, link.platform)
             else:
                 LOG.warning("%s failed for %s (exit %s): %s", name, link.platform, code, error)
+                private = private or looks_private(error)
+            outcome = ("fault" if fault else "private" if error and looks_private(error) else
+                       "no_media" if not error or error.strip().lower() in NO_MEDIA_RESULTS else "error")
+            await asyncio.to_thread(METRICS.record, link.platform, name, outcome, int((time.monotonic() - started) * 1000))
             failures.append(name)
         except OSError as exc:
+            BREAKERS.neutral(name, link.platform)
+            reported = True
+            await asyncio.to_thread(METRICS.record, link.platform, name, "unavailable", int((time.monotonic() - started) * 1000))
             LOG.warning("%s unavailable: %s", name, exc)
             failures.append(name)
+        except Exception as exc:
+            fault = provider_fault(exc)
+            opened = BREAKERS.failure(name, link.platform) if fault else None
+            if opened is None:
+                BREAKERS.neutral(name, link.platform)
+            elif opened:
+                LOG.warning("Provider cooldown opened: %s/%s", name, link.platform)
+            reported = True
+            await asyncio.to_thread(METRICS.record, link.platform, name,
+                                    "fault" if fault else "error",
+                                    int((time.monotonic() - started) * 1000))
+            LOG.exception("Unexpected %s failure for %s", name, link.platform)
+            failures.append(name)
+        finally:
+            if not reported:
+                BREAKERS.abandon(name, link.platform)
+                outcome = "cancelled" if asyncio.current_task().cancelling() else "error"
+                await asyncio.to_thread(METRICS.record, link.platform, name, outcome, int((time.monotonic() - started) * 1000))
         return None
 
     if canonical and "/share/p/" in original_link.url:
@@ -237,11 +310,19 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         # gallery extractor first chance at the complete album.
         result = await attempt("gallery-dl")
         if result is not None:
+            await asyncio.to_thread(METRICS.record_winner, link.platform, result[1])
             return result
         providers = tuple(name for name in providers if name != "gallery-dl")
     result = await first_success(providers, attempt, stagger=0)
     if result is not None:
+        await asyncio.to_thread(METRICS.record_winner, link.platform, result[1])
         return result
     if oversize:
         raise DownloadError("Medya Discord yükleme sınırını aşıyor.")
+    if private:
+        raise DownloadError("Bu hesap gizli olduğu için medya indirilemedi. Gizli hesaplar yalnızca oturum açılmış bir çerez dosyasıyla (COOKIE_FILE) indirilebilir.")
+    if link.platform == "threads" and re.search(r"/(?:share|t)/", link.url):
+        # threads.com answers these short links with a /login/ redirect unless a
+        # valid session cookie is configured, so no provider can see the post.
+        raise DownloadError("Threads paylaşım bağlantısı oturum açmadan açılamıyor. COOKIE_FILE ayarlayın veya gönderiyi tarayıcıda açıp adres çubuğundaki /@kullanıcı/post/... bağlantısını yapıştırın.")
     raise DownloadError("Bu gönderiden medya alınamadı (" + ", ".join(failures) + "). Gönderi özel olabilir veya sağlayıcılar geçici olarak çalışmıyor olabilir.")

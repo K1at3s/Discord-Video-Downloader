@@ -12,7 +12,7 @@ import discord
 from .captions import display_chunks, fetch_caption
 from .download import DownloadError
 from .links import PostLink
-from .youtube import download_youtube
+from .youtube import download_youtube, video_height
 
 LOG = logging.getLogger(__name__)
 LABELS = {"mp3": "🎵 MP3", "360": "📱 360p", "720": "📺 720p", "1080": "🖥️ 1080p"}
@@ -77,7 +77,20 @@ class YoutubeChoiceView(discord.ui.LayoutView):
             except discord.HTTPException as exc:
                 LOG.warning("Could not update YouTube prompt: %s", exc)
         try:
-            async with self.bot.jobs:
+            delivered_label = LABELS[choice]
+            async def on_wait() -> None:
+                if prompt:
+                    try:
+                        await prompt.edit(view=status_view(self.title, f"⏳ **{LABELS[choice]}** sırada…"))
+                    except discord.HTTPException as exc:
+                        LOG.warning("Could not mark YouTube choice queued: %s", exc)
+
+            async with self.bot.job_slots.slot(self.source_message.author.id, on_wait):
+                if prompt:
+                    try:
+                        await prompt.edit(view=status_view(self.title, f"⏳ **{LABELS[choice]}** hazırlanıyor…"))
+                    except discord.HTTPException as exc:
+                        LOG.warning("Could not update YouTube prompt: %s", exc)
                 caption_task = asyncio.create_task(fetch_caption(self.link, self.bot.cookie_file))
                 with tempfile.TemporaryDirectory(prefix="discord-youtube-") as temporary:
                     try:
@@ -85,6 +98,14 @@ class YoutubeChoiceView(discord.ui.LayoutView):
                             self.link, Path(temporary), choice, self.bot.upload_bytes,
                             self.bot.cookie_file, self.bot.cobalt_url, self.bot.cobalt_key,
                         )
+                        if choice != "mp3":
+                            height = await video_height(file)
+                            if height:
+                                delivered_label = f"{height}p video (en fazla {choice}p seçildi)"
+                                file = file.rename(file.with_name(f"youtube_{height}p.mp4"))
+                                if height < int(choice):
+                                    LOG.info("YouTube %sp requested, %sp delivered via %s within upload limit",
+                                             choice, height, provider)
                         caption = await caption_task
                         from .bot import media_gallery_view
                         chunks = display_chunks(caption)
@@ -102,7 +123,7 @@ class YoutubeChoiceView(discord.ui.LayoutView):
                         await asyncio.gather(caption_task, return_exceptions=True)
             if prompt:
                 try:
-                    await prompt.edit(view=status_view(self.title, f"✅ **{LABELS[choice]}** gönderildi."))
+                    await prompt.edit(view=status_view(self.title, f"✅ **{delivered_label}** gönderildi."))
                 except discord.HTTPException as exc:
                     LOG.warning("Could not mark YouTube prompt complete: %s", exc)
             LOG.info("YouTube choice %s delivered via %s", choice, provider)

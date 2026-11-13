@@ -27,6 +27,17 @@ class ProviderRaceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await first_success(("one", "two"), attempt, stagger=0))
 
+    async def test_provider_exception_does_not_cancel_other_provider(self):
+        async def attempt(name):
+            if name == "broken":
+                raise RuntimeError("extractor bug")
+            await asyncio.sleep(0.01)
+            return name
+
+        with self.assertLogs("media_bot.race", level="ERROR"):
+            result = await first_success(("broken", "working"), attempt, stagger=0)
+        self.assertEqual(result, "working")
+
 
 if __name__ == "__main__":
     unittest.main()

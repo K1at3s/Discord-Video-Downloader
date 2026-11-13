@@ -1,9 +1,27 @@
+import json
 import unittest
 
-from media_bot.web_providers import _btch_urls, _indown_urls, _rapidsave_url, _tiktokio_urls, _vette_urls
+from media_bot.web_providers import _btch_urls, _embed_media, _indown_urls, _rapidsave_url, _tiktokio_urls, _vette_urls
 
 
 class WebProviderParsingTests(unittest.TestCase):
+    def test_embed_reads_carousel_children(self):
+        context = json.dumps({"gql_data": {"shortcode_media": {
+            "__typename": "GraphSidecar",
+            "is_video": False,
+            "display_url": "https://scontent.cdninstagram.com/a.jpg",
+            "edge_sidecar_to_children": {"edges": [
+                {"node": {"is_video": False, "display_url": "https://scontent.cdninstagram.com/a.jpg"}},
+                {"node": {"is_video": True, "video_url": "https://instagram.fabc-1.fna.fbcdn.net/v.mp4"}},
+            ]},
+        }}})
+        page = '{"contextJSON":' + json.dumps(context) + ',"other":1}'
+        self.assertEqual(_embed_media(page), [
+            ("https://scontent.cdninstagram.com/a.jpg", "photo"),
+            ("https://instagram.fabc-1.fna.fbcdn.net/v.mp4", "video"),
+        ])
+        self.assertEqual(_embed_media(page.replace("fbcdn.net", "evil.example")), [])
+        self.assertEqual(_embed_media("<html></html>"), [])
     def test_indown_keeps_all_album_items(self):
         page = """
         <div class="download-items"><a href="https://cdninstagram.com/a.jpg">Download Photo</a></div>

@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
 from .cobalt import download_cobalt
+from .circuit_breaker import BREAKERS, provider_fault
 from .direct_providers import _stream, allowed_media_url
 from .download import DownloadError, _run
 from .links import PostLink
 from .race import first_success
+from .provider_metrics import METRICS
 
 LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
@@ -109,9 +113,11 @@ async def _gendownload(link: PostLink, folder: Path, choice: str, max_bytes: int
 
 async def _yt_dlp(link: PostLink, folder: Path, choice: str, max_bytes: int, cookie_file: Path | None) -> tuple[int, str]:
     base = [sys.executable, "-m", "yt_dlp", "--no-config", "--no-playlist",
-               "--remote-components", "ejs:github", "--socket-timeout", "15",
+               "--socket-timeout", "15",
                "--retries", "2", "--fragment-retries", "2", "--max-filesize", str(max_bytes),
                "-o", str(folder / "youtube.%(ext)s")]
+    if os.getenv("YTDLP_REMOTE_EJS", "0") == "1":
+        base.extend(("--remote-components", "ejs:github"))
     if cookie_file:
         base.extend(("--cookies", str(cookie_file)))
     if choice == "mp3":
@@ -149,6 +155,27 @@ def _selected_file(folder: Path, choice: str, max_bytes: int) -> Path | None:
     return None
 
 
+async def video_height(path: Path) -> int | None:
+    """Read the delivered video's actual height without blocking Discord's event loop."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=height", "-of", "default=nokey=1:noprint_wrappers=1",
+            str(path), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            output, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            proc.kill()
+            await proc.communicate()
+            raise
+        height = int(output.strip()) if proc.returncode == 0 else 0
+        return height if height > 0 else None
+    except (OSError, ValueError, asyncio.TimeoutError):
+        return None
+
+
 async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes: int,
                            cookie_file: Path | None, cobalt_url: str | None,
                            cobalt_key: str | None) -> tuple[Path, str]:
@@ -159,9 +186,15 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
     failures = []
 
     async def attempt(name: str) -> tuple[Path, str] | None:
+        started = time.monotonic()
+        if not BREAKERS.allow(name, "youtube"):
+            await asyncio.to_thread(METRICS.record, "youtube", name, "skipped", 0)
+            failures.append(f"{name}: geçici olarak atlandı")
+            return None
         target = folder / name
-        target.mkdir(parents=True, exist_ok=True)
+        reported = False
         try:
+            target.mkdir(parents=True, exist_ok=True)
             if name == "gendownload":
                 count, error = await asyncio.wait_for(_gendownload(link, target, choice, max_bytes), timeout=100)
             elif name == "cobalt":
@@ -174,14 +207,43 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
                 count, error = await _yt_dlp(link, target, choice, max_bytes, cookie_file)
             selected = _selected_file(target, choice, max_bytes)
             if selected:
+                BREAKERS.success(name, "youtube")
+                reported = True
+                await asyncio.to_thread(METRICS.record, "youtube", name, "success", int((time.monotonic() - started) * 1000))
                 LOG.info("YouTube %s from %s", choice, name)
                 return selected, name
+            fault = provider_fault(error)
+            opened = BREAKERS.failure(name, "youtube") if fault else None
+            if opened is None:
+                BREAKERS.neutral(name, "youtube")
+            elif opened:
+                LOG.warning("Provider cooldown opened: %s/youtube", name)
+            reported = True
+            outcome = ("fault" if fault else "private" if error and
+                       any(hint in error.casefold() for hint in ("private", "login", "403", "404")) else
+                       "no_media" if not error else "error")
+            await asyncio.to_thread(METRICS.record, "youtube", name, outcome, int((time.monotonic() - started) * 1000))
             failures.append(f"{name}: {error or 'uygun dosya yok'}")
-        except (asyncio.TimeoutError, OSError) as exc:
+        except asyncio.TimeoutError as exc:
+            if BREAKERS.failure(name, "youtube"):
+                LOG.warning("Provider cooldown opened: %s/youtube", name)
+            reported = True
+            await asyncio.to_thread(METRICS.record, "youtube", name, "fault", int((time.monotonic() - started) * 1000))
             failures.append(f"{name}: {type(exc).__name__}")
+        except OSError as exc:
+            BREAKERS.neutral(name, "youtube")
+            reported = True
+            await asyncio.to_thread(METRICS.record, "youtube", name, "unavailable", int((time.monotonic() - started) * 1000))
+            failures.append(f"{name}: {type(exc).__name__}")
+        finally:
+            if not reported:
+                BREAKERS.abandon(name, "youtube")
+                outcome = "cancelled" if asyncio.current_task().cancelling() else "error"
+                await asyncio.to_thread(METRICS.record, "youtube", name, outcome, int((time.monotonic() - started) * 1000))
         return None
 
     result = await first_success(providers, attempt)
     if result is not None:
+        await asyncio.to_thread(METRICS.record_winner, "youtube", result[1])
         return result
     raise DownloadError("Seçilen format alınamadı. " + "; ".join(failures)[:400])

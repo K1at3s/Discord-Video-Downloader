@@ -35,6 +35,7 @@ MEDIA_HOSTS = {
     "threads": ("fbcdn.net", "cdninstagram.com", "threads.com"),
     "weibo": ("sinaimg.cn", "weibocdn.com", "weibo.com"),
     "spotify": ("scdn.co",),
+    "bluesky": ("cdn.bsky.app", "cdn.bsky.social"),
 }
 
 

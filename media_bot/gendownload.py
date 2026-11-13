@@ -41,7 +41,7 @@ async def download_gendownload(link: PostLink, folder: Path, max_bytes: int) -> 
     for attempt in range(2):
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
-                                         trust_env=False) as client:
+                                         trust_env=False, transport=httpx.AsyncHTTPTransport(retries=3)) as client:
                 response = await client.post("https://gendownload.com/api/extract", json={"url": link.url})
                 response.raise_for_status()
                 images, videos = media_options(response.json(), max_bytes)

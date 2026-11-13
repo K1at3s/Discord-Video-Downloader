@@ -16,6 +16,7 @@ from .direct_providers import _Meta, _facebook_page
 from .links import PostLink
 from .race import first_success
 from .reddit_post import fetch_reddit_post
+from .threads_links import CONTENT_HEADERS, _threads_cookies
 
 LOG = logging.getLogger(__name__)
 TIMEOUT = httpx.Timeout(8, connect=4)
@@ -35,8 +36,9 @@ def _page_caption(page: str, platform: str, *, allow_truncated: bool = False) ->
     values = parser.values
     if platform == "instagram":
         description = values.get("og:description") or values.get("description") or ""
-        # Instagram often prefixes the caption with engagement counts and an author.
-        match = re.search(r"\bon Instagram:\s*[\"“](.*?)[\"”]\s*$", description, re.S)
+        # Instagram prefixes captions with engagement counts and an author, e.g.
+        # `16K likes, 48 comments - user on November 12, 2026: "<caption>"`.
+        match = re.search(r"[\"“](.+)[\"”]\s*$", description, re.S)
         return _clean(match.group(1) if match else description)
     description = values.get("og:description") or values.get("description") or values.get("twitter:description")
     cleaned = _clean(description)
@@ -52,8 +54,12 @@ def _reddit_id(url: str) -> str | None:
     return next((group for group in match.groups() if group), None) if match else None
 
 
-async def _fetch(link: PostLink, route: str) -> str | None:
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, trust_env=False) as client:
+async def _fetch(link: PostLink, route: str, cookie_file: Path | None = None) -> str | None:
+    threads_page = link.platform == "threads" and route == "page"
+    headers = CONTENT_HEADERS if threads_page else None
+    cookies = _threads_cookies(cookie_file) if threads_page else None
+    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, trust_env=False,
+                                 headers=headers, cookies=cookies) as client:
         if route == "tikwm":
             response = await client.post("https://www.tikwm.com/api/", data={"url": link.url, "hd": "1"})
             response.raise_for_status()
@@ -97,13 +103,17 @@ async def _fetch(link: PostLink, route: str) -> str | None:
 
 async def _gallery_caption(link: PostLink, cookie_file: Path) -> str | None:
     """Ask gallery-dl for authenticated Facebook post metadata when configured."""
+    from .cookiefile import netscape_jar
     from .direct_providers import canonical_facebook_post
 
+    jar = netscape_jar(cookie_file)
+    if jar is None:
+        return None
     canonical = await canonical_facebook_post(link)
     target = canonical or link
     proc = await asyncio.create_subprocess_exec(
         sys.executable, "-m", "gallery_dl", "--ignore-config", "--no-input",
-        "--cookies", str(cookie_file), "--range", "1", "--simulate", "--print", "{post_text}", target.url,
+        "--cookies", str(jar), "--range", "1", "--simulate", "--print", "{post_text}", target.url,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )
@@ -136,13 +146,13 @@ async def fetch_caption(link: PostLink, cookie_file: Path | None = None) -> str 
     async def attempt(route: str) -> str | None:
         nonlocal preview
         try:
-            result = await _gallery_caption(link, cookie_file) if route == "gallery" and cookie_file else await _fetch(link, route)
+            result = await _gallery_caption(link, cookie_file) if route == "gallery" and cookie_file else await _fetch(link, route, cookie_file)
             if link.platform == "facebook" and result and result.endswith(("...", "…")):
                 if route == "page":
                     preview = result
                 return None
             return result
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+        except (httpx.HTTPError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
             LOG.debug("Caption unavailable via %s for %s: %s", route, link.platform, exc)
             return None
 

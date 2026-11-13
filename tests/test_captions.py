@@ -1,9 +1,10 @@
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from media_bot.captions import _page_caption, caption_messages, display_chunks, fetch_caption
-from media_bot.bot import media_gallery_view
+from media_bot.bot import MediaBot, media_gallery_view
 from media_bot.links import PostLink
 
 
@@ -18,6 +19,11 @@ class CaptionTests(unittest.TestCase):
     def test_instagram_open_graph_caption_without_engagement_prefix(self):
         page = '<meta property="og:description" content="50 likes - user on Instagram: &quot;Merhaba 🌍&quot;">'
         self.assertEqual(_page_caption(page, "instagram"), "Merhaba 🌍")
+
+    def test_instagram_comment_count_prefix_is_not_caption(self):
+        page = ('<meta property="og:description" content="16K likes, 48 comments - bgyet on '
+                'November 12, 2026: &quot;Metin. Sondaki söz: &quot;alıntı&quot;.&quot;">')
+        self.assertEqual(_page_caption(page, "instagram"), 'Metin. Sondaki söz: "alıntı".')
 
     def test_threads_login_promo_is_not_post_text(self):
         page = '<meta property="og:description" content="Join Threads to share ideas, ask questions, post random thoughts.">'
@@ -44,7 +50,7 @@ class CaptionTests(unittest.TestCase):
 
 class FacebookCaptionFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_preview_is_used_when_complete_caption_is_unavailable(self):
-        async def fake_fetch(_link, route):
+        async def fake_fetch(_link, route, _cookie=None):
             return "WhatsApp kalici olarak..." if route == "page" else None
 
         link = PostLink("facebook", "https://www.facebook.com/share/p/123/")
@@ -52,12 +58,32 @@ class FacebookCaptionFallbackTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await fetch_caption(link), "WhatsApp kalici olarak...")
 
     async def test_complete_caption_wins_over_preview(self):
-        async def fake_fetch(_link, route):
+        async def fake_fetch(_link, route, _cookie=None):
             return "WhatsApp kalıcı olarak kapandı." if route == "gendownload" else "WhatsApp kalici olarak..."
 
         link = PostLink("facebook", "https://www.facebook.com/share/p/123/")
         with patch("media_bot.captions._fetch", new=fake_fetch):
             self.assertEqual(await fetch_caption(link), "WhatsApp kalıcı olarak kapandı.")
+
+
+class CaptionDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_media_is_sent_when_caption_provider_raises(self):
+        async def download(_link, folder, *_args):
+            folder.mkdir(parents=True, exist_ok=True)
+            media = folder / "photo.jpg"
+            media.write_bytes(b"photo")
+            return [media], "test"
+
+        bot = SimpleNamespace(cookie_file=None, upload_bytes=1024, cobalt_url=None,
+                              cobalt_key=None, gallery_rs_path=None, _reply=AsyncMock())
+        link = PostLink("instagram", "https://www.instagram.com/p/ABC123/")
+        with patch("media_bot.bot.fetch_caption", new_callable=AsyncMock,
+                   side_effect=RuntimeError("caption failed")), \
+             patch("media_bot.bot.download_media", side_effect=download), \
+             self.assertLogs("media_bot.bot", level="ERROR"):
+            await MediaBot._handle_link(bot, object(), link)
+        self.assertEqual(bot._reply.await_count, 1)
+        self.assertEqual(bot._reply.await_args.kwargs["files"][0].name, "photo.jpg")
 
 
 if __name__ == "__main__":

@@ -8,16 +8,32 @@ if ($existing) {
     Write-Host 'Cobalt zaten 127.0.0.1:9000 üzerinde çalışıyor.'
     exit 0
 }
-$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
-if ($nodeCommand) {
-    $nodePath = $nodeCommand.Source
-} else {
-    $nodePath = 'C:\Program Files\WindowsApps\OpenAI.CodexPrimaryRuntime.v26-1111-570-0_26.1111.570.0_x64__3k8sg7r9htsxt\dependencies\node\bin\node.exe'
-    if (-not (Test-Path -LiteralPath $nodePath)) {
-        throw 'Cobalt için Node çalıştırıcısı bulunamadı. Codex çalışma ortamı güncellendiyse start-cobalt.ps1 içindeki yolu yenileyin.'
-    }
+
+$bunCommand = Get-Command bun -ErrorAction SilentlyContinue
+if (-not $bunCommand) {
+    throw 'Sistemde Bun çalıştırıcısı bulunamadı. Lütfen Bun kurulumunu kontrol edin.'
 }
-$process = Start-Process -FilePath $nodePath -ArgumentList 'src/cobalt' -WorkingDirectory $apiPath -WindowStyle Hidden -RedirectStandardOutput (Join-Path $apiPath 'cobalt.stdout.log') -RedirectStandardError (Join-Path $apiPath 'cobalt.stderr.log') -PassThru
+
+$configPath = Join-Path $apiPath 'src\config.js'
+$config = Get-Content -LiteralPath $configPath -Raw
+$bunIncompatibleEnvClone = 'Object.freeze(structuredClone(process.env))'
+if ($config.Contains($bunIncompatibleEnvClone)) {
+    $config = $config.Replace($bunIncompatibleEnvClone, 'Object.freeze({ ...process.env })')
+    Set-Content -LiteralPath $configPath -Value $config -NoNewline -Encoding utf8
+    Write-Host 'Cobalt yapılandırmasındaki Bun process.env uyumsuzluğu düzeltildi.'
+}
+
+$youtubePath = Join-Path $apiPath 'src\processing\services\youtube.js'
+$youtubeSource = Get-Content -LiteralPath $youtubePath -Raw
+if ($youtubeSource.Contains('import ivm from "isolated-vm";')) {
+    $youtubeSource = $youtubeSource.Replace('import ivm from "isolated-vm";', '')
+    $youtubeSource = $youtubeSource.Replace('  const isolate = new ivm.Isolate();', '  const { default: ivm } = await import("isolated-vm");' + "`n" + '  const isolate = new ivm.Isolate();')
+    Set-Content -LiteralPath $youtubePath -Value $youtubeSource -NoNewline -Encoding utf8
+    Write-Host 'Cobalt YouTube modülünün Bun ile açılışı düzeltildi.'
+}
+
+$process = Start-Process -FilePath $bunCommand.Source -ArgumentList @('run', 'src/cobalt.js') -WorkingDirectory $apiPath -WindowStyle Hidden -RedirectStandardOutput (Join-Path $apiPath 'cobalt.stdout.log') -RedirectStandardError (Join-Path $apiPath 'cobalt.stderr.log') -PassThru
+
 for ($attempt = 0; $attempt -lt 10; $attempt++) {
     Start-Sleep -Seconds 2
     try {

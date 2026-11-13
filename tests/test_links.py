@@ -16,6 +16,7 @@ class LinkTests(unittest.TestCase):
             ("https://www.douyin.com/video/1234567890123456789", "douyin"),
             ("https://m.weibo.cn/status/P3abcde", "weibo"),
             ("https://streamable.com/hn8hq", "streamable"),
+            ("https://bsky.app/profile/example.bsky.social/post/3abc123?ref=tracking", "bluesky"),
             ("https://open.spotify.com/track/123ABCxyz", "spotify"),
             ("https://open.spotify.com/intl-tr/track/C6d4tpGCTQnxkKWVsy6AUA?si=tracking", "spotify"),
             ("https://youtu.be/jNQXAC9IVRw?si=tracking", "youtube"),
@@ -29,7 +30,7 @@ class LinkTests(unittest.TestCase):
                 self.assertNotIn("ref=", link.url)
 
     def test_rejects_profiles_and_fake_domains(self):
-        for url in ["https://x.com/user", "https://x.com.evil.test/user/status/123", "http://127.0.0.1/status/123", "https://instagram.com/user/"]:
+        for url in ["https://x.com/user", "https://x.com.evil.test/user/status/123", "http://127.0.0.1/status/123", "https://instagram.com/user/", "https://bsky.app/profile/example.bsky.social"]:
             with self.subTest(url=url):
                 self.assertIsNone(parse_link(url))
 
