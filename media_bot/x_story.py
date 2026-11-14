@@ -177,8 +177,11 @@ def _quote_height(draw: ImageDraw.ImageDraw, node: dict, level: int, width: int)
 def _draw_quote(draw: ImageDraw.ImageDraw, image: Image.Image, node: dict,
                 avatars: list[Image.Image | None], level: int, x: int, y: int, width: int) -> int:
     height = _quote_height(draw, node, level, width)
-    draw.rounded_rectangle((x, y, x + width, y + height), radius=22,
-                           fill="#111a23" if level == 1 else "#0b1219", outline="#3d4a55", width=2)
+    draw.rounded_rectangle((x, y, x + width, y + height), radius=24,
+                           fill="#172635" if level == 1 else "#101d2b", outline="#3b5a6c", width=2)
+    draw.rounded_rectangle((x + 14, y + (86 if level == 1 else 73),
+                            x + 18, y + height - 20), radius=2,
+                           fill="#61c8c4" if level == 1 else "#7d8ddb")
     avatar_size = 56 if level == 1 else 43
     _avatar(draw, image, avatars[level] if len(avatars) > level else None, x + 20, y + 19, avatar_size)
     author = node.get("author") or {}
@@ -198,7 +201,7 @@ def _draw_quote(draw: ImageDraw.ImageDraw, image: Image.Image, node: dict,
     font = _font(29 if level == 1 else 25)
     step = 43 if level == 1 else 36
     for index, line in enumerate(lines):
-        _draw_mixed(draw, (x + 22, text_y + index * step), line, font, TEXT)
+        _draw_mixed(draw, (x + 30, text_y + index * step), line, font, TEXT)
     nested = node.get("quote")
     if level < 2 and isinstance(nested, dict) and nested.get("text"):
         nested_y = text_y + len(lines) * step + 14
@@ -232,52 +235,47 @@ def _draw_stats(draw: ImageDraw.ImageDraw, post: dict, y: int) -> None:
 
 
 def _story_background(height: int, card_top: int, card_bottom: int) -> Image.Image:
-    """Create a quiet night-sky frame around the readable post surface."""
+    """Paint a soft aurora frame around the post, without busy linework."""
     image = Image.new("RGBA", (WIDTH, height))
     draw = ImageDraw.Draw(image)
     for y in range(height):
         progress = y / max(height - 1, 1)
         draw.line((0, y, WIDTH, y),
-                  fill=(int(13 + 8 * progress), int(20 + 5 * progress),
-                        int(34 + 10 * progress), 255))
+                  fill=(int(11 + 8 * progress), int(18 + 10 * progress),
+                        int(31 + 12 * progress), 255))
 
     glows = Image.new("RGBA", image.size, (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glows)
-    glow_draw.ellipse((WIDTH - 440, -270, WIDTH + 360, 550), fill=(41, 126, 150, 115))
-    glow_draw.ellipse((-390, card_bottom - 410, 480, card_bottom + 490), fill=(79, 57, 133, 100))
-    image = Image.alpha_composite(image, glows.filter(ImageFilter.GaussianBlur(115)))
-
-    detail_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    details = ImageDraw.Draw(detail_layer)
-    for offset in range(-height, WIDTH + height, 112):
-        details.line((offset, 0, offset + height, height), fill=(159, 193, 212, 13), width=2)
-    details.ellipse((WIDTH - 190, card_top - 164, WIDTH + 310, card_top + 336),
-                    outline=(117, 207, 218, 33), width=2)
-    details.ellipse((WIDTH - 310, card_top - 284, WIDTH + 430, card_top + 456),
-                    outline=(117, 207, 218, 21), width=2)
-    details.rounded_rectangle((17, card_top + 65, 23, card_bottom - 65), radius=3,
-                              fill=(87, 201, 203, 170))
-    return Image.alpha_composite(image, detail_layer)
+    glow_draw.ellipse((WIDTH - 470, -250, WIDTH + 330, 650), fill=(35, 155, 165, 140))
+    glow_draw.ellipse((-490, card_bottom - 430, 500, card_bottom + 480), fill=(95, 65, 157, 140))
+    glow_draw.ellipse((230, card_top - 160, 980, card_top + 500), fill=(31, 87, 133, 70))
+    return Image.alpha_composite(image, glows.filter(ImageFilter.GaussianBlur(135)))
 
 
 def _card_surface(image: Image.Image, top: int, bottom: int) -> None:
-    """A charcoal panel with its own soft gradient and a narrow color accent."""
+    """Paint the post on a restrained slate surface with a luminous header."""
     panel_height = bottom - top
     panel = Image.new("RGBA", (1000, panel_height))
     panel_draw = ImageDraw.Draw(panel)
     for y in range(panel_height):
         progress = y / max(panel_height - 1, 1)
         panel_draw.line((0, y, 999, y),
-                        fill=(int(16 - 6 * progress), int(24 - 9 * progress),
-                              int(35 - 13 * progress), 255))
+                        fill=(int(20 - 8 * progress), int(31 - 12 * progress),
+                              int(45 - 17 * progress), 255))
+    for y in range(min(170, panel_height)):
+        shade = y / 170
+        panel_draw.line((0, y, 999, y),
+                        fill=(int(24 - 4 * shade), int(39 - 8 * shade),
+                              int(55 - 10 * shade), 255))
     mask = Image.new("L", panel.size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, 999, panel_height - 1), radius=30, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, 999, panel_height - 1), radius=38, fill=255)
     image.paste(panel, (40, top), mask)
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((40, top, 1040, bottom), radius=30,
-                           outline="#365261", width=2)
-    draw.rounded_rectangle((82, top + 19, 172, top + 25), radius=3, fill="#57c8c8")
-    draw.rounded_rectangle((178, top + 19, 216, top + 25), radius=3, fill="#7d7cce")
+    draw.rounded_rectangle((40, top, 1040, bottom), radius=38,
+                           outline="#486777", width=2)
+    draw.rounded_rectangle((84, top + 21, 266, top + 27), radius=3, fill="#60d2cb")
+    draw.rounded_rectangle((274, top + 21, 318, top + 27), radius=3, fill="#828bd4")
+    draw.line((92, top + 160, 988, top + 160), fill="#304959", width=2)
 
 
 def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
@@ -295,15 +293,15 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     quote_height = _quote_height(measure, quote, 1, 896) if quote else 0
     divider_y = quote_top + quote_height + 28 if quote else body_end + 30
     card_height = divider_y + 76 + 91
-    height = max(1286, card_height + 140)
+    height = max(1286, card_height + 190)
     card_top = 40 + max(0, (1150 - card_height) // 2)
     card_bottom = card_top + card_height
 
     image = _story_background(height, card_top, card_bottom)
     shadow_mask = Image.new("L", (WIDTH, height), 0)
-    ImageDraw.Draw(shadow_mask).rounded_rectangle((44, card_top + 12, 1036, card_bottom + 15), radius=30, fill=135)
+    ImageDraw.Draw(shadow_mask).rounded_rectangle((44, card_top + 16, 1036, card_bottom + 20), radius=38, fill=175)
     shadow = Image.new("RGBA", (WIDTH, height), (0, 0, 0, 0))
-    shadow.putalpha(shadow_mask.filter(ImageFilter.GaussianBlur(25)))
+    shadow.putalpha(shadow_mask.filter(ImageFilter.GaussianBlur(37)))
     image = Image.alpha_composite(image, shadow)
     draw = ImageDraw.Draw(image)
     _card_surface(image, card_top, card_bottom)
@@ -316,9 +314,9 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     if author.get("verified") is True:
         _badge(draw, name_end + 9, card_top + 65, 28)
     draw.text((216, card_top + 108), "@" + handle if handle else "X", font=_font(29), fill=MUTED)
-    draw.rounded_rectangle((925, card_top + 62, 987, card_top + 114), radius=16,
-                           fill="#182a35", outline="#59b8c2", width=2)
-    draw.text((944, card_top + 65), "X", font=_font(29, True), fill="#dceff1")
+    draw.ellipse((925, card_top + 59, 989, card_top + 123),
+                 fill="#122734", outline="#6cbfc5", width=2)
+    draw.text((945, card_top + 67), "X", font=_font(29, True), fill="#e2f5f4")
 
     for index, line in enumerate(body_lines):
         _draw_mixed(draw, (92, card_top + 190 + index * 51), line, body_font, TEXT)
@@ -330,14 +328,14 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     draw.text((92, divider + 23), _date_label(post.get("created_at")), font=_font(27), fill=MUTED)
     _draw_stats(draw, post, divider + 75)
 
-    footer_font = _font(28, True)
+    footer_font = _font(24, True)
     footer = _fit(draw, footer[:80], footer_font, 650)
     footer_width = _mixed_width(draw, footer, footer_font)
-    footer_x = (WIDTH - footer_width - 55) // 2
-    footer_y = height - 66
-    draw.ellipse((footer_x, footer_y, footer_x + 39, footer_y + 39), fill="white")
-    draw.line((footer_x + 19, footer_y + 7, footer_x + 19, footer_y + 25), fill="#101820", width=4)
-    draw.polygon(((footer_x + 10, footer_y + 21), (footer_x + 28, footer_y + 21),
-                  (footer_x + 19, footer_y + 31)), fill="#101820")
-    draw.text((footer_x + 55, footer_y - 2), footer, font=footer_font, fill="white")
+    pill_width = footer_width + 100
+    footer_x = (WIDTH - pill_width) // 2
+    footer_y = height - 91
+    draw.rounded_rectangle((footer_x, footer_y, footer_x + pill_width, footer_y + 56),
+                           radius=28, fill="#132735", outline="#416b79", width=2)
+    draw.ellipse((footer_x + 21, footer_y + 20, footer_x + 37, footer_y + 36), fill="#69d4cb")
+    draw.text((footer_x + 55, footer_y + 11), footer, font=footer_font, fill="#e2edef")
     image.convert("RGB").save(output, "PNG", optimize=True)
