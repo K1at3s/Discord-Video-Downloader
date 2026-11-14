@@ -50,7 +50,7 @@ def _pieces(value: str) -> list[tuple[str, str]]:
             pieces.append(("flag", value[index:index + 2]))
             index += 2
             continue
-        if code >= 0x1F300 or char in "ℹ❤♥⭐✅☑":
+        if code >= 0x1F300 or 0x2600 <= code <= 0x27BF or char in "ℹ❤♥⭐✅☑":
             if plain:
                 pieces.append(("text", plain))
                 plain = ""
@@ -231,6 +231,55 @@ def _draw_stats(draw: ImageDraw.ImageDraw, post: dict, y: int) -> None:
     draw.text((572, y - 2), _count(post.get("views")), font=count_font, fill=MUTED)
 
 
+def _story_background(height: int, card_top: int, card_bottom: int) -> Image.Image:
+    """Create a quiet night-sky frame around the readable post surface."""
+    image = Image.new("RGBA", (WIDTH, height))
+    draw = ImageDraw.Draw(image)
+    for y in range(height):
+        progress = y / max(height - 1, 1)
+        draw.line((0, y, WIDTH, y),
+                  fill=(int(13 + 8 * progress), int(20 + 5 * progress),
+                        int(34 + 10 * progress), 255))
+
+    glows = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glows)
+    glow_draw.ellipse((WIDTH - 440, -270, WIDTH + 360, 550), fill=(41, 126, 150, 115))
+    glow_draw.ellipse((-390, card_bottom - 410, 480, card_bottom + 490), fill=(79, 57, 133, 100))
+    image = Image.alpha_composite(image, glows.filter(ImageFilter.GaussianBlur(115)))
+
+    detail_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    details = ImageDraw.Draw(detail_layer)
+    for offset in range(-height, WIDTH + height, 112):
+        details.line((offset, 0, offset + height, height), fill=(159, 193, 212, 13), width=2)
+    details.ellipse((WIDTH - 190, card_top - 164, WIDTH + 310, card_top + 336),
+                    outline=(117, 207, 218, 33), width=2)
+    details.ellipse((WIDTH - 310, card_top - 284, WIDTH + 430, card_top + 456),
+                    outline=(117, 207, 218, 21), width=2)
+    details.rounded_rectangle((17, card_top + 65, 23, card_bottom - 65), radius=3,
+                              fill=(87, 201, 203, 170))
+    return Image.alpha_composite(image, detail_layer)
+
+
+def _card_surface(image: Image.Image, top: int, bottom: int) -> None:
+    """A charcoal panel with its own soft gradient and a narrow color accent."""
+    panel_height = bottom - top
+    panel = Image.new("RGBA", (1000, panel_height))
+    panel_draw = ImageDraw.Draw(panel)
+    for y in range(panel_height):
+        progress = y / max(panel_height - 1, 1)
+        panel_draw.line((0, y, 999, y),
+                        fill=(int(16 - 6 * progress), int(24 - 9 * progress),
+                              int(35 - 13 * progress), 255))
+    mask = Image.new("L", panel.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, 999, panel_height - 1), radius=30, fill=255)
+    image.paste(panel, (40, top), mask)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((40, top, 1040, bottom), radius=30,
+                           outline="#365261", width=2)
+    draw.rounded_rectangle((82, top + 19, 172, top + 25), radius=3, fill="#57c8c8")
+    draw.rounded_rectangle((178, top + 19, 216, top + 25), radius=3, fill="#7d7cce")
+
+
 def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
                  footer: str = "Discord Video Bot") -> None:
     author = post.get("author") or {}
@@ -250,18 +299,15 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     card_top = 40 + max(0, (1150 - card_height) // 2)
     card_bottom = card_top + card_height
 
-    image = Image.new("RGBA", (WIDTH, height), "#15212c")
-    background = ImageDraw.Draw(image)
-    for y in range(height):
-        mix = y / max(height - 1, 1)
-        background.line((0, y, WIDTH, y), fill=(int(49 - 34 * mix), int(63 - 45 * mix), int(78 - 56 * mix), 255))
+    image = _story_background(height, card_top, card_bottom)
     shadow_mask = Image.new("L", (WIDTH, height), 0)
-    ImageDraw.Draw(shadow_mask).rounded_rectangle((44, card_top + 12, 1036, card_bottom + 15), radius=36, fill=135)
+    ImageDraw.Draw(shadow_mask).rounded_rectangle((44, card_top + 12, 1036, card_bottom + 15), radius=30, fill=135)
     shadow = Image.new("RGBA", (WIDTH, height), (0, 0, 0, 0))
     shadow.putalpha(shadow_mask.filter(ImageFilter.GaussianBlur(25)))
     image = Image.alpha_composite(image, shadow)
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((40, card_top, 1040, card_bottom), radius=36, fill="#090e14", outline="#273541", width=2)
+    _card_surface(image, card_top, card_bottom)
+    draw = ImageDraw.Draw(image)
 
     _avatar(draw, image, avatars[0] if avatars else None, 92, card_top + 48, 96)
     name_font = _font(37, True)
@@ -270,8 +316,9 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     if author.get("verified") is True:
         _badge(draw, name_end + 9, card_top + 65, 28)
     draw.text((216, card_top + 108), "@" + handle if handle else "X", font=_font(29), fill=MUTED)
-    draw.ellipse((925, card_top + 62, 987, card_top + 114), fill="#f0f3f5")
-    draw.text((944, card_top + 65), "X", font=_font(29, True), fill="#090e14")
+    draw.rounded_rectangle((925, card_top + 62, 987, card_top + 114), radius=16,
+                           fill="#182a35", outline="#59b8c2", width=2)
+    draw.text((944, card_top + 65), "X", font=_font(29, True), fill="#dceff1")
 
     for index, line in enumerate(body_lines):
         _draw_mixed(draw, (92, card_top + 190 + index * 51), line, body_font, TEXT)
