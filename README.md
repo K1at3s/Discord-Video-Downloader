@@ -80,6 +80,7 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `HIGHLIGHT_HEALTHCHECK_RESERVE` | `3` | Sağlık kontrolünün kullanıcılar için ayırdığı minimum bucket jetonu |
 | `MEDIA_CACHE_TTL_MINUTES` | `20` | Aynı URL tekrarları için kısa süreli genel medya önbelleği süresi (dakika) |
 | `MEDIA_CACHE_MAX_MB` | `1024` | Genel medya önbelleği toplam boyut sınırı (MB) |
+| `STATS_OWNER_ID` | `1065352859195015260` | `!stats` / `!panel` ve başka kullanıcının `!info` sorgusunu kullanabilecek tek Discord kullanıcı ID'si |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
 
@@ -155,9 +156,11 @@ Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat 
 Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`), işlem süresi, dosya sayısı ve toplam boyut. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Son 30 güne kadar tutulur.
 
 Discord komutları (izin verilen kanalda):
-- `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı.
-- `!info` / `!profil` / `!me` → kendi işlem özetiniz; `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı.
+- `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
+- `!info` / `!profil` / `!me` → kendi işlem özetiniz. `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
 - `!metrics` / `!durum` → sağlayıcı ve highlight bucket özeti.
+
+Kayıtlar tek bir SQLite dosyasında tutulur ama her satır `user_id` (ve `guild_id`) ile ilişkilidir; `!info` yalnızca ilgili kullanıcının satırlarını toplar.
 
 Komut satırından:
 

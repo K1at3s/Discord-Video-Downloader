@@ -40,6 +40,7 @@ from .youtube_view import YoutubeChoiceView
 from .youtube import download_youtube
 
 LOG = logging.getLogger(__name__)
+STATS_OWNER_ID = int(os.getenv("STATS_OWNER_ID", "1065352859195015260"))
 COLORS = {"instagram": 0xC13584, "facebook": 0x1877F2, "reddit": 0xFF4500,
           "tiktok": 0x25F4EE, "youtube": 0xFF0033, "x": 0x20262E,
           "threads": 0x20262E, "douyin": 0x25F4EE, "weibo": 0xE6162D,
@@ -304,6 +305,9 @@ class MediaBot(discord.Client):
             target_id = int(argument.strip())
             target = SimpleNamespace(id=target_id, display_name=str(target_id), name=str(target_id))
             target_name = str(target_id)
+        if getattr(target, "id", None) != message.author.id and message.author.id != STATS_OWNER_ID:
+            await self._reply(message, "Başka bir kullanıcının istatistiğini yalnızca bot sahibi görebilir.")
+            return
         text = REQUESTS.format_user(getattr(target, "id", 0), 24, display_name=target_name)
         await self._reply(message, text[:1900])
 
@@ -317,6 +321,9 @@ class MediaBot(discord.Client):
             return
         if content in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem",
                        "!panel", "!admin", "!kontrol", "!kontrolpanel"}:
+            if message.author.id != STATS_OWNER_ID:
+                await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
+                return
             await self._reply_request_stats(message)
             return
         if content.split(maxsplit=1)[0] in {"!info", "!profil", "!me", "!kimlik"}:
