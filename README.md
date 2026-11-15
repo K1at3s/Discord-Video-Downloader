@@ -152,15 +152,22 @@ Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat 
 
 ### İşlem kayıtları (sunucu/kullanıcı/link)
 
-Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`) ve kısa detay. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Son 30 güne kadar tutulur.
+Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`), işlem süresi, dosya sayısı ve toplam boyut. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Son 30 güne kadar tutulur.
 
-Discord içinden `!stats` / `!istatistik` / `!islem` yazarak son 24 saat ve 7 gün özetini (toplam, başarılı/başarısız, başarı yüzdesi, platform/sunucu/kullanıcı kırılımı ve son işlemler) görebilirsiniz. Komut satırından:
+Discord komutları (izin verilen kanalda):
+- `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı.
+- `!info` / `!profil` / `!me` → kendi işlem özetiniz; `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı.
+- `!metrics` / `!durum` → sağlayıcı ve highlight bucket özeti.
+
+Komut satırından:
 
 ```powershell
 .\.venv\Scripts\python.exe -m media_bot.request_log
+.\.venv\Scripts\python.exe -m media_bot.request_log --hours 168
+.\.venv\Scripts\python.exe -m media_bot.request_log --user 123456789012345678
 ```
 
-`--hours 168` ile aralık seçilebilir. `DATABASE_PATH` farklıysa `--db <o klasör>\request_log.sqlite3` kullanın.
+`DATABASE_PATH` farklıysa `--db <o klasör>\request_log.sqlite3` kullanın.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"

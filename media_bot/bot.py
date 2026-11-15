@@ -7,9 +7,11 @@ import logging
 import os
 import re
 import tempfile
+import time
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import discord
@@ -186,6 +188,11 @@ def _has_media(post: dict) -> bool:
                for key in ("all", "photos", "videos", "external"))
 
 
+def _is_admin(message: discord.Message) -> bool:
+    permissions = getattr(getattr(message, "author", None), "guild_permissions", None)
+    return bool(getattr(permissions, "administrator", False) or getattr(permissions, "manage_guild", False))
+
+
 def _positive_int(name: str, default: int, maximum: int) -> int:
     value = int(os.getenv(name, str(default)))
     if not 1 <= value <= maximum:
@@ -283,18 +290,38 @@ class MediaBot(discord.Client):
         await self._reply(message, text[:1900])
 
     async def _reply_request_stats(self, message: discord.Message) -> None:
-        parts = [REQUESTS.format_text(24), "", REQUESTS.format_text(168)]
-        await self._reply(message, "\n".join(parts).strip()[:1900])
+        role = "Yönetici" if _is_admin(message) else "Kullanıcı"
+        text = REQUESTS.format_panel(24, role=role)
+        await self._reply(message, text[:1900])
+
+    async def _reply_user_info(self, message: discord.Message, argument: str = "") -> None:
+        target = message.author
+        target_name = getattr(target, "display_name", None) or getattr(target, "name", None) or str(target)
+        if message.mentions:
+            target = message.mentions[0]
+            target_name = getattr(target, "display_name", None) or getattr(target, "name", None) or str(target)
+        elif argument.strip().isdigit():
+            target_id = int(argument.strip())
+            target = SimpleNamespace(id=target_id, display_name=str(target_id), name=str(target_id))
+            target_name = str(target_id)
+        text = REQUESTS.format_user(getattr(target, "id", 0), 24, display_name=target_name)
+        await self._reply(message, text[:1900])
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild or (self.channel_ids and message.channel.id not in self.channel_ids):
             return
-        content = (message.content or "").strip().lower()
+        raw_content = (message.content or "").strip()
+        content = raw_content.lower()
         if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
             await self._reply_metrics(message)
             return
-        if content in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem"}:
+        if content in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem",
+                       "!panel", "!admin", "!kontrol", "!kontrolpanel"}:
             await self._reply_request_stats(message)
+            return
+        if content.split(maxsplit=1)[0] in {"!info", "!profil", "!me", "!kimlik"}:
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_user_info(message, argument)
             return
         links = find_links(message.content, self.max_links)
         if not links:
@@ -318,9 +345,13 @@ class MediaBot(discord.Client):
                 for link in links:
                     outcome = "failure"
                     detail = ""
+                    files: list[Path] = []
+                    started = time.monotonic()
                     try:
                         result = await self._handle_link(message, link, status_message=queue_notice)
-                        if result in {"success", "failure", "pending", "skipped"}:
+                        if isinstance(result, tuple):
+                            outcome, files = result
+                        elif result in {"success", "failure", "pending", "skipped"}:
                             outcome = result
                         elif result is None:
                             outcome = "success"
@@ -340,6 +371,7 @@ class MediaBot(discord.Client):
                             url=link.url,
                             outcome=outcome,
                             detail=detail,
+                            elapsed_ms=int((time.monotonic() - started) * 1000),
                         )
                         return
                     except discord.HTTPException as exc:
@@ -357,6 +389,8 @@ class MediaBot(discord.Client):
                         outcome = "failure"
                         detail = "exception"
                     finally:
+                        file_count = len(files)
+                        total_bytes = sum(p.stat().st_size for p in files if p.is_file())
                         REQUESTS.record(
                             guild_id=getattr(message.guild, "id", None),
                             guild_name=getattr(message.guild, "name", None),
@@ -367,6 +401,9 @@ class MediaBot(discord.Client):
                             url=link.url,
                             outcome=outcome,
                             detail=detail,
+                            elapsed_ms=int((time.monotonic() - started) * 1000),
+                            file_count=file_count,
+                            bytes=total_bytes,
                         )
         finally:
             if queue_notice:
@@ -386,7 +423,7 @@ class MediaBot(discord.Client):
             return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
                                        mention_author=False, suppress_embeds=embed is None)
 
-    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
+    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         async def set_status(text: str) -> None:
             if not status_message:
                 return
@@ -414,7 +451,7 @@ class MediaBot(discord.Client):
         if link.platform == "youtube":
             view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu")
             view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
-            return "pending"
+            return "pending", []
         if link.platform == "x":
             await set_status("⏳ Gönderi hazırlanıyor...")
             return await self._handle_x(message, link, status_message=status_message)
@@ -450,13 +487,13 @@ class MediaBot(discord.Client):
                 if caption or preview.has_content:
                     for embed in preview_embeds(link, preview, caption):
                         await self._reply(message, embed=embed, view=source_button(link.url))
-                    return "success"
+                    return "success", []
                 else:
                     if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
                         await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
                     else:
                         await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
-                    return "failure"
+                    return "failure", []
             try:
                 caption = await caption_or_none()
                 chunks = display_chunks(caption)
@@ -468,7 +505,7 @@ class MediaBot(discord.Client):
                 for index, text_chunk in enumerate(chunks[1:], 2):
                     await self._reply(message, view=media_gallery_view(link.platform, [], text_chunk,
                                                                        link.url, part=index))
-                return "success"
+                return "success", media
             finally:
                 if not caption_task.done():
                     caption_task.cancel()
@@ -489,7 +526,7 @@ class MediaBot(discord.Client):
                 return preview
         return Preview()
 
-    async def _handle_bluesky(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
+    async def _handle_bluesky(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         async def set_status(text: str) -> None:
             if not status_message:
                 return
@@ -507,17 +544,17 @@ class MediaBot(discord.Client):
                     "Bluesky gönderisi bulunamadı veya erişim engellendi." if status in {400, 401, 403, 404} else
                     "Bluesky gönderisi şu anda alınamadı.")
             await self._reply(message, text, view=source_button(link.url))
-            return "failure"
+            return "failure", []
         if post is None:
             await self._reply(message, "Bluesky gönderisi bulunamadı.", view=source_button(link.url))
-            return "failure"
+            return "failure", []
         if post.adult:
             if not channel_is_nsfw(message.channel):
                 await self._reply(message, "+18 Bluesky gönderileri yalnızca NSFW kanallarda kullanılabilir.")
-                return "failure"
+                return "failure", []
             if not await self.adult_quota.aclaim(message.author.id, istanbul_day()):
                 await self._reply(message, "Günlük +18 indirme hakkını kullandın.")
-                return "failure"
+                return "failure", []
         with tempfile.TemporaryDirectory(prefix="discord-bluesky-") as tmp:
             await set_status("⏳ Medya indiriliyor...")
             try:
@@ -541,9 +578,9 @@ class MediaBot(discord.Client):
                 await self._reply(message, view=media_gallery_view("bluesky", [], chunk,
                                                                    link.url, part=index,
                                                                    show_missing_caption=False))
-            return "success"
+            return "success", media
 
-    async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
+    async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         preview = (await self._reddit_message_preview(message, link)
                    if not link.post_id else Preview())
         subreddit_prefix = re.match(r"^r/[^ ]+ · ", preview.title or "")
@@ -555,22 +592,23 @@ class MediaBot(discord.Client):
         adult = await reddit_adult_status(post)
         if adult is None:
             await self._reply(message, "Reddit gönderisinin +18 durumu doğrulanamadı; güvenlik nedeniyle işlenmedi.")
-            return "failure"
+            return "failure", []
         if adult:
             if not channel_is_nsfw(message.channel):
                 await self._reply(message, "+18 Reddit gönderileri yalnızca NSFW olarak işaretlenmiş kanallarda kullanılabilir.")
-                return "failure"
+                return "failure", []
             day = istanbul_day()
             if not await self.adult_quota.aclaim(message.author.id, day):
                 await self._reply(message, "Günlük +18 indirme hakkını kullandın. Yeni hak Türkiye saatiyle gece yarısında açılır.")
-                return "failure"
+                return "failure", []
             return await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
         return await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
 
     async def _deliver_reddit(self, message: discord.Message, link: PostLink,
                               post: RedditPost | None, preview: Preview,
-                              title_hint: str | None, status_message: discord.Message | None = None) -> str:
+                              title_hint: str | None, status_message: discord.Message | None = None) -> tuple[str, list[Path]]:
         source_url = post.url if post else link.url
+        media_files: list[Path] = []
         with tempfile.TemporaryDirectory(prefix="discord-reddit-") as tmp:
             if not post and not preview.has_content:
                 preview = await self._reddit_message_preview(message, link)
@@ -602,7 +640,7 @@ class MediaBot(discord.Client):
                 await self._reply(message, "Reddit gönderi bilgisi alınamadı.", view=source_button(link.url))
                 delivered_any = False
             if post and post.is_self is True:
-                return "success" if delivered_any else "failure"
+                return ("success" if delivered_any else "failure"), media_files
             if status_message:
                 try:
                     await status_message.edit(content="⏳ Medya indiriliyor...")
@@ -617,15 +655,16 @@ class MediaBot(discord.Client):
                     user_id=user_id,
                 )
             except DownloadError:
-                return "success" if delivered_any else "failure"
+                return ("success" if delivered_any else "failure"), media_files
+            media_files.extend(media)
             for index, batch in enumerate(attachment_batches(media), 1):
                 await self._reply(message, files=batch,
                                   view=media_gallery_view("reddit", batch, None, source_url,
                                                           part=index, show_missing_caption=False))
                 delivered_any = True
-            return "success" if delivered_any else "failure"
+            return ("success" if delivered_any else "failure"), media_files
 
-    async def _handle_spotify(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
+    async def _handle_spotify(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         try:
             track = await fetch_track(link)
             source = await find_audio_source(track)
@@ -644,12 +683,12 @@ class MediaBot(discord.Client):
                 file.rename(output)
                 await self._reply(message, files=[output])
                 LOG.info("Spotify track delivered as MP3 via %s", provider)
-                return "success"
+                return "success", [output]
         except DownloadError as exc:
             await self._reply(message, f"Spotify parçası indirilemedi: {exc}", view=source_button(link.url))
-            return "failure"
+            return "failure", []
 
-    async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
+    async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         with tempfile.TemporaryDirectory(prefix="discord-x-") as tmp:
             folder = Path(tmp)
             post = await fetch_post(link.post_id or "")
@@ -683,21 +722,21 @@ class MediaBot(discord.Client):
 
                 if media_task is None:
                     if not card_sent:
-                        await self._send_x_fallback(message, link, post, "Bu gönderide indirilecek medya yok.")
-                        return "failure"
-                    return "success"
+                        ok = await self._send_x_fallback(message, link, post, "Bu gönderide indirilecek medya yok.")
+                        return ("success" if ok else "failure"), []
+                    return "success", []
 
                 try:
                     media, _ = await media_task
                 except DownloadError as exc:
                     if not card_sent:
                         ok = await self._send_x_fallback(message, link, post, str(exc))
-                        return "success" if ok else "failure"
-                    return "success"
+                        return ("success" if ok else "failure"), []
+                    return "success", []
                 for index, chunk in enumerate(attachment_batches(media)):
                     content = "**X medyası**" if index == 0 else "**X medyası** · devam"
                     await self._reply(message, content, chunk, view=source_button(link.url))
-                return "success"
+                return "success", media
             finally:
                 if media_task is not None:
                     if not media_task.done():
