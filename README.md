@@ -81,6 +81,8 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `MEDIA_CACHE_TTL_MINUTES` | `20` | Aynı URL tekrarları için kısa süreli genel medya önbelleği süresi (dakika) |
 | `MEDIA_CACHE_MAX_MB` | `1024` | Genel medya önbelleği toplam boyut sınırı (MB) |
 | `STATS_OWNER_ID` | `1065352859195015260` | `!stats` / `!panel` ve başka kullanıcının `!info` sorgusunu kullanabilecek tek Discord kullanıcı ID'si |
+| `MAINTENANCE_MODE` | *(boş)* | `1` ise bot açılışta bakım modunda başlar; boşsa son durum `data/maintenance.json` dosyasından okunur |
+| `MAINTENANCE_MESSAGE` | *(varsayılan metin)* | Bakım açıkken kullanıcılara gösterilecek özel mesaj |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
 
@@ -159,6 +161,7 @@ Discord komutları (izin verilen kanalda):
 - `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
 - `!info` / `!profil` / `!me` → kendi işlem özetiniz. `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
 - `!metrics` / `!durum` → sağlayıcı ve highlight bucket özeti.
+- `!bakim` → bakım modu durumu; `!bakim ac` / `!bakim kapat` ile aç/kapat. **Yalnızca `STATS_OWNER_ID`**. Bakım açıkken sahip dışındaki kullanıcıların yeni indirmeleri engellenir (panelde “Bakım: Açık” görünür).
 
 Kayıtlar tek bir SQLite dosyasında tutulur ama her satır `user_id` (ve `guild_id`) ile ilişkilidir; `!info` yalnızca ilgili kullanıcının satırlarını toplar.
 

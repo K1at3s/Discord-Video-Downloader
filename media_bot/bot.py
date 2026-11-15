@@ -27,6 +27,7 @@ from .indownio import is_rate_limited_message, resolve_indownio
 from .links import PostLink, find_links, parse_link
 from .job_slots import JobSlots
 from .limits import attachment_batches
+from .maintenance import MAINTENANCE, env_enabled
 from .metadata_fallback import Preview, fetch_preview, preview_embeds
 from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
@@ -292,8 +293,28 @@ class MediaBot(discord.Client):
 
     async def _reply_request_stats(self, message: discord.Message) -> None:
         role = "Yönetici" if _is_admin(message) else "Kullanıcı"
-        text = REQUESTS.format_panel(24, role=role)
+        text = REQUESTS.format_panel(24, role=role, maintenance=MAINTENANCE.active)
         await self._reply(message, text[:1900])
+
+    async def _reply_maintenance(self, message: discord.Message, argument: str) -> None:
+        action = argument.strip().lower()
+        if not action:
+            state = "Açık" if MAINTENANCE.active else "Kapalı"
+            await self._reply(
+                message,
+                f"🧰 Bakım modu: **{state}**\n"
+                "Açmak için `!bakim ac`, kapatmak için `!bakim kapat`.",
+            )
+            return
+        if action in {"ac", "aç", "on", "1", "açık", "acik"}:
+            MAINTENANCE.set(True)
+            await self._reply(message, f"🧰 Bakım modu açıldı. {MAINTENANCE.message}")
+            return
+        if action in {"kapat", "off", "0", "kapalı", "kapali"}:
+            MAINTENANCE.set(False)
+            await self._reply(message, "✅ Bakım modu kapatıldı; yeni indirmeler yeniden açık.")
+            return
+        await self._reply(message, "Kullanım: `!bakim` · `!bakim ac` · `!bakim kapat`")
 
     async def _reply_user_info(self, message: discord.Message, argument: str = "") -> None:
         target = message.author
@@ -330,8 +351,18 @@ class MediaBot(discord.Client):
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_user_info(message, argument)
             return
+        if content.split(maxsplit=1)[0] in {"!bakim", "!maintenance"}:
+            if message.author.id != STATS_OWNER_ID:
+                await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
+                return
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_maintenance(message, argument)
+            return
         links = find_links(message.content, self.max_links)
         if not links:
+            return
+        if MAINTENANCE.active and message.author.id != STATS_OWNER_ID:
+            await self._reply(message, MAINTENANCE.message)
             return
         queue_notice: discord.Message | None = None
 
@@ -793,6 +824,11 @@ def main() -> None:
         database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
         METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
         REQUESTS.configure(database_path.with_name("request_log.sqlite3"))
+        MAINTENANCE.configure(
+            database_path.parent / "maintenance.json",
+            enabled=env_enabled("MAINTENANCE_MODE"),
+            message=os.getenv("MAINTENANCE_MESSAGE", ""),
+        )
         MEDIA_CACHE.configure(
             database_path.parent / "media_cache",
             ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 20, 1440) * 60,

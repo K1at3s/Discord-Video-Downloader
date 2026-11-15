@@ -60,6 +60,9 @@ class RequestLogTests(unittest.TestCase):
             self.assertIn("Bakım: Kapalı", panel)
             self.assertIn("Başarı oranı: %50.0", panel)
 
+            open_panel = log.format_panel(24, maintenance=True)
+            self.assertIn("Bakım: Açık", open_panel)
+
     def test_pending_record_can_be_updated(self):
         with tempfile.TemporaryDirectory() as temp:
             log = RequestLog(Path(temp) / "requests.sqlite3")
