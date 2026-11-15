@@ -171,6 +171,7 @@ Discord komutları (izin verilen kanalda):
 - `!hatalar` → son 24 saatteki başarısız işlemler (platform, kullanıcı, sunucu, kısa neden). `!hatalar 7g` ile aralık verilebilir. **Yalnızca `STATS_OWNER_ID`**.
 - `!cache` / `!önbellek` → genel medya ve highlight önbelleğinin kayıt/dosya/boyut ve TTL bilgisi.
 - `!cachetemizle` / `!önbellektemizle` → her iki önbelleği temizler. **Yalnızca `STATS_OWNER_ID`**.
+- Başarısız bir indirmeden sonra bot, bağlantıyı paylaşan kişi (ve sahip) için **🔁 Tekrar dene** butonu gönderir; buton aynı bağlantıyı yeniden işler ve sonucu ayrı bir işlem kaydı olarak yazar.
 
 Kayıtlar tek bir SQLite dosyasında tutulur ama her satır `user_id` (ve `guild_id`) ile ilişkilidir; `!info` yalnızca ilgili kullanıcının satırlarını toplar.
 

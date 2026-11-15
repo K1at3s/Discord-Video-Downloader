@@ -34,6 +34,7 @@ from .provider_metrics import METRICS
 from .request_log import REQUESTS, _human_bytes, parse_range, resolve_platform
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
+from .retry_view import RetryView
 from .spotify import fetch_track, find_audio_source
 from .threads_links import highlight_post_link, resolve_threads_link
 from .x_card import create_card, fetch_post
@@ -216,6 +217,7 @@ class MediaBot(discord.Client):
         self.cobalt_url = cobalt_url
         self.cobalt_key = cobalt_key
         self.gallery_rs_path = gallery_rs_path
+        self.owner_id = STATS_OWNER_ID
         self.adult_quota = AdultQuota(database_path or Path(__file__).resolve().parent.parent / "data" / "bot.sqlite3")
         self._health_task: asyncio.Task | None = None
         self._health_skips = 0
@@ -593,6 +595,15 @@ class MediaBot(discord.Client):
                         )
                         if pending_target is not None and record_id:
                             pending_target.request_id = record_id
+                    if outcome == "failure" and detail != "forbidden" and hasattr(message, "reply"):
+                        try:
+                            await message.reply(
+                                "↩️ İşlem başarısız oldu. Tekrar denemek için:",
+                                view=RetryView(bot=self, source_message=message, link=link),
+                                mention_author=False,
+                            )
+                        except discord.HTTPException:
+                            pass
         finally:
             if queue_notice:
                 try:
