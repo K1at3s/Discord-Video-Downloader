@@ -132,6 +132,7 @@ Reddit'in +18 durumu doğrulanamazsa bağlantı işlenmez. Bu denetim **Reddit'e
 | `media_bot/bluesky.py` | Resmî Bluesky API’si, görseller ve HLS video |
 | `media_bot/captions.py`, `metadata_fallback.py`, `limits.py` | Açıklama, önizleme, dosya sınırları |
 | `media_bot/provider_metrics.py` | Sağlayıcı denemelerinin yerel 24 saatlik özeti |
+| `media_bot/request_log.py` | Sunucu/kullanıcı/link bazlı işlem kayıtları ve başarı yüzdesi özeti |
 | `media_bot/job_slots.py` | Toplam ve kullanıcı başına eşzamanlılık sınırı |
 | `tests/` | Birim ve akış testleri |
 
@@ -148,6 +149,18 @@ Bot çalışırken her sağlayıcı denemesinin sonucu ve süresi `data/provider
 `DATABASE_PATH` farklı bir klasörü gösteriyorsa raporda `--db <o klasör>\provider_metrics.sqlite3` kullanın. `--hours 48` veya `--hours 168` gibi bir aralık seçilebilir. Rapor platform ve sağlayıcı başına deneme sayısını, kazanan sağlayıcıyı, `quota`/`skipped`/arıza ayrımını ve başarılı denemelerin p50/p95 sürelerini gösterir (`quota` = gerçek kota aşımı; `skipped` = cooldown/reserve vb. atlanan denemeler). 14 günden eski ölçümler bot açılışında ve çalışırken günde bir kez temizlenir. Rapor ağ isteği yapmaz.
 
 Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat ve 7 gün özetini (varsa highlight bucket durumu dahil) görebilirsiniz.
+
+### İşlem kayıtları (sunucu/kullanıcı/link)
+
+Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`) ve kısa detay. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Son 30 güne kadar tutulur.
+
+Discord içinden `!stats` / `!istatistik` / `!islem` yazarak son 24 saat ve 7 gün özetini (toplam, başarılı/başarısız, başarı yüzdesi, platform/sunucu/kullanıcı kırılımı ve son işlemler) görebilirsiniz. Komut satırından:
+
+```powershell
+.\.venv\Scripts\python.exe -m media_bot.request_log
+```
+
+`--hours 168` ile aralık seçilebilir. `DATABASE_PATH` farklıysa `--db <o klasör>\request_log.sqlite3` kullanın.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"

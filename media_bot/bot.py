@@ -28,6 +28,7 @@ from .limits import attachment_batches
 from .metadata_fallback import Preview, fetch_preview, preview_embeds
 from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
+from .request_log import REQUESTS
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
 from .spotify import fetch_track, find_audio_source
@@ -281,12 +282,19 @@ class MediaBot(discord.Client):
         text = "\n".join(parts).strip()
         await self._reply(message, text[:1900])
 
+    async def _reply_request_stats(self, message: discord.Message) -> None:
+        parts = [REQUESTS.format_text(24), "", REQUESTS.format_text(168)]
+        await self._reply(message, "\n".join(parts).strip()[:1900])
+
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild or (self.channel_ids and message.channel.id not in self.channel_ids):
             return
         content = (message.content or "").strip().lower()
         if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
             await self._reply_metrics(message)
+            return
+        if content in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem"}:
+            await self._reply_request_stats(message)
             return
         links = find_links(message.content, self.max_links)
         if not links:
@@ -308,10 +316,31 @@ class MediaBot(discord.Client):
                     except discord.HTTPException:
                         pass
                 for link in links:
+                    outcome = "failure"
+                    detail = ""
                     try:
-                        await self._handle_link(message, link, status_message=queue_notice)
+                        result = await self._handle_link(message, link, status_message=queue_notice)
+                        if result in {"success", "failure", "pending", "skipped"}:
+                            outcome = result
+                        elif result is None:
+                            outcome = "success"
+                        else:
+                            outcome = "success"
                     except discord.Forbidden:
                         LOG.warning("Kanal için mesaj veya dosya gönderme izni yok: %s", message.channel.id)
+                        outcome = "failure"
+                        detail = "forbidden"
+                        REQUESTS.record(
+                            guild_id=getattr(message.guild, "id", None),
+                            guild_name=getattr(message.guild, "name", None),
+                            channel_id=getattr(message.channel, "id", None),
+                            user_id=getattr(message.author, "id", None),
+                            user_name=str(getattr(message.author, "name", message.author)),
+                            platform=link.platform,
+                            url=link.url,
+                            outcome=outcome,
+                            detail=detail,
+                        )
                         return
                     except discord.HTTPException as exc:
                         LOG.warning("Discord upload error: %s", exc)
@@ -320,9 +349,25 @@ class MediaBot(discord.Client):
                             await self._reply(message, "Dosya Discord yükleme sınırını aşıyor (sunucu/kanal limiti nedeniyle gönderilemedi).")
                         else:
                             await self._reply(message, "Dosya Discord'a yüklenemedi. Kanal izinlerini ve yükleme sınırını kontrol edin.")
+                        outcome = "failure"
+                        detail = f"http:{exc.status}"
                     except Exception:
                         LOG.exception("Unexpected error processing %s", link.platform)
                         await self._reply(message, "Bu bağlantı işlenirken beklenmeyen bir hata oluştu.")
+                        outcome = "failure"
+                        detail = "exception"
+                    finally:
+                        REQUESTS.record(
+                            guild_id=getattr(message.guild, "id", None),
+                            guild_name=getattr(message.guild, "name", None),
+                            channel_id=getattr(message.channel, "id", None),
+                            user_id=getattr(message.author, "id", None),
+                            user_name=str(getattr(message.author, "name", message.author)),
+                            platform=link.platform,
+                            url=link.url,
+                            outcome=outcome,
+                            detail=detail,
+                        )
         finally:
             if queue_notice:
                 try:
@@ -341,7 +386,7 @@ class MediaBot(discord.Client):
             return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
                                        mention_author=False, suppress_embeds=embed is None)
 
-    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
         async def set_status(text: str) -> None:
             if not status_message:
                 return
@@ -359,24 +404,20 @@ class MediaBot(discord.Client):
                 link = highlight
         if link.platform == "spotify":
             await set_status("⏳ Parça hazırlanıyor...")
-            await self._handle_spotify(message, link, status_message=status_message)
-            return
+            return await self._handle_spotify(message, link, status_message=status_message)
         if link.platform == "bluesky":
             await set_status("⏳ Gönderi alınıyor...")
-            await self._handle_bluesky(message, link, status_message=status_message)
-            return
+            return await self._handle_bluesky(message, link, status_message=status_message)
         if link.platform == "reddit":
             await set_status("⏳ Gönderi hazırlanıyor...")
-            await self._handle_reddit(message, link, status_message=status_message)
-            return
+            return await self._handle_reddit(message, link, status_message=status_message)
         if link.platform == "youtube":
             view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu")
             view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
-            return
+            return "pending"
         if link.platform == "x":
             await set_status("⏳ Gönderi hazırlanıyor...")
-            await self._handle_x(message, link, status_message=status_message)
-            return
+            return await self._handle_x(message, link, status_message=status_message)
         caption_task = asyncio.create_task(fetch_caption(link, self.cookie_file))
 
         async def caption_or_none() -> str | None:
@@ -409,12 +450,13 @@ class MediaBot(discord.Client):
                 if caption or preview.has_content:
                     for embed in preview_embeds(link, preview, caption):
                         await self._reply(message, embed=embed, view=source_button(link.url))
+                    return "success"
                 else:
                     if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
                         await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
                     else:
                         await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
-                return
+                    return "failure"
             try:
                 caption = await caption_or_none()
                 chunks = display_chunks(caption)
@@ -426,6 +468,7 @@ class MediaBot(discord.Client):
                 for index, text_chunk in enumerate(chunks[1:], 2):
                     await self._reply(message, view=media_gallery_view(link.platform, [], text_chunk,
                                                                        link.url, part=index))
+                return "success"
             finally:
                 if not caption_task.done():
                     caption_task.cancel()
@@ -446,7 +489,7 @@ class MediaBot(discord.Client):
                 return preview
         return Preview()
 
-    async def _handle_bluesky(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+    async def _handle_bluesky(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
         async def set_status(text: str) -> None:
             if not status_message:
                 return
@@ -464,17 +507,17 @@ class MediaBot(discord.Client):
                     "Bluesky gönderisi bulunamadı veya erişim engellendi." if status in {400, 401, 403, 404} else
                     "Bluesky gönderisi şu anda alınamadı.")
             await self._reply(message, text, view=source_button(link.url))
-            return
+            return "failure"
         if post is None:
             await self._reply(message, "Bluesky gönderisi bulunamadı.", view=source_button(link.url))
-            return
+            return "failure"
         if post.adult:
             if not channel_is_nsfw(message.channel):
                 await self._reply(message, "+18 Bluesky gönderileri yalnızca NSFW kanallarda kullanılabilir.")
-                return
+                return "failure"
             if not await self.adult_quota.aclaim(message.author.id, istanbul_day()):
                 await self._reply(message, "Günlük +18 indirme hakkını kullandın.")
-                return
+                return "failure"
         with tempfile.TemporaryDirectory(prefix="discord-bluesky-") as tmp:
             await set_status("⏳ Medya indiriliyor...")
             try:
@@ -498,8 +541,9 @@ class MediaBot(discord.Client):
                 await self._reply(message, view=media_gallery_view("bluesky", [], chunk,
                                                                    link.url, part=index,
                                                                    show_missing_caption=False))
+            return "success"
 
-    async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+    async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
         preview = (await self._reddit_message_preview(message, link)
                    if not link.post_id else Preview())
         subreddit_prefix = re.match(r"^r/[^ ]+ · ", preview.title or "")
@@ -511,22 +555,21 @@ class MediaBot(discord.Client):
         adult = await reddit_adult_status(post)
         if adult is None:
             await self._reply(message, "Reddit gönderisinin +18 durumu doğrulanamadı; güvenlik nedeniyle işlenmedi.")
-            return
+            return "failure"
         if adult:
             if not channel_is_nsfw(message.channel):
                 await self._reply(message, "+18 Reddit gönderileri yalnızca NSFW olarak işaretlenmiş kanallarda kullanılabilir.")
-                return
+                return "failure"
             day = istanbul_day()
             if not await self.adult_quota.aclaim(message.author.id, day):
                 await self._reply(message, "Günlük +18 indirme hakkını kullandın. Yeni hak Türkiye saatiyle gece yarısında açılır.")
-                return
-            await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
-            return
-        await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
+                return "failure"
+            return await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
+        return await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
 
     async def _deliver_reddit(self, message: discord.Message, link: PostLink,
                               post: RedditPost | None, preview: Preview,
-                              title_hint: str | None, status_message: discord.Message | None = None) -> None:
+                              title_hint: str | None, status_message: discord.Message | None = None) -> str:
         source_url = post.url if post else link.url
         with tempfile.TemporaryDirectory(prefix="discord-reddit-") as tmp:
             if not post and not preview.has_content:
@@ -554,10 +597,12 @@ class MediaBot(discord.Client):
                         view=media_gallery_view("reddit", batch, None, source_url,
                                                 part=index, show_missing_caption=False),
                     )
+                delivered_any = True
             else:
                 await self._reply(message, "Reddit gönderi bilgisi alınamadı.", view=source_button(link.url))
+                delivered_any = False
             if post and post.is_self is True:
-                return
+                return "success" if delivered_any else "failure"
             if status_message:
                 try:
                     await status_message.edit(content="⏳ Medya indiriliyor...")
@@ -572,13 +617,15 @@ class MediaBot(discord.Client):
                     user_id=user_id,
                 )
             except DownloadError:
-                return
+                return "success" if delivered_any else "failure"
             for index, batch in enumerate(attachment_batches(media), 1):
                 await self._reply(message, files=batch,
                                   view=media_gallery_view("reddit", batch, None, source_url,
                                                           part=index, show_missing_caption=False))
+                delivered_any = True
+            return "success" if delivered_any else "failure"
 
-    async def _handle_spotify(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+    async def _handle_spotify(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
         try:
             track = await fetch_track(link)
             source = await find_audio_source(track)
@@ -597,10 +644,12 @@ class MediaBot(discord.Client):
                 file.rename(output)
                 await self._reply(message, files=[output])
                 LOG.info("Spotify track delivered as MP3 via %s", provider)
+                return "success"
         except DownloadError as exc:
             await self._reply(message, f"Spotify parçası indirilemedi: {exc}", view=source_button(link.url))
+            return "failure"
 
-    async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+    async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str:
         with tempfile.TemporaryDirectory(prefix="discord-x-") as tmp:
             folder = Path(tmp)
             post = await fetch_post(link.post_id or "")
@@ -635,17 +684,20 @@ class MediaBot(discord.Client):
                 if media_task is None:
                     if not card_sent:
                         await self._send_x_fallback(message, link, post, "Bu gönderide indirilecek medya yok.")
-                    return
+                        return "failure"
+                    return "success"
 
                 try:
                     media, _ = await media_task
                 except DownloadError as exc:
                     if not card_sent:
-                        await self._send_x_fallback(message, link, post, str(exc))
-                    return
+                        ok = await self._send_x_fallback(message, link, post, str(exc))
+                        return "success" if ok else "failure"
+                    return "success"
                 for index, chunk in enumerate(attachment_batches(media)):
                     content = "**X medyası**" if index == 0 else "**X medyası** · devam"
                     await self._reply(message, content, chunk, view=source_button(link.url))
+                return "success"
             finally:
                 if media_task is not None:
                     if not media_task.done():
@@ -653,13 +705,15 @@ class MediaBot(discord.Client):
                     await asyncio.gather(media_task, return_exceptions=True)
 
     async def _send_x_fallback(self, message: discord.Message, link: PostLink,
-                               post: dict | None, error: str) -> None:
+                               post: dict | None, error: str) -> bool:
         preview = (Preview(description=post.get("text")) if post else await fetch_preview(link))
         if preview.has_content:
             for embed in preview_embeds(link, preview):
                 await self._reply(message, embed=embed, view=source_button(link.url))
+            return True
         else:
             await self._reply(message, f"X: {error}")
+            return False
 
 
 def main() -> None:
@@ -687,6 +741,7 @@ def main() -> None:
             raise ValueError("GALLERY_DL_RS_PATH mevcut bir programı göstermeli")
         database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
         METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
+        REQUESTS.configure(database_path.with_name("request_log.sqlite3"))
         MEDIA_CACHE.configure(
             database_path.parent / "media_cache",
             ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 20, 1440) * 60,
