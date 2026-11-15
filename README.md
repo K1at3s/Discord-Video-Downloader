@@ -159,7 +159,9 @@ Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt 
 
 Discord komutları (izin verilen kanalda):
 - `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
-- `!info` / `!profil` / `!me` → kendi işlem özetiniz. `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
+  - Aralık: `!stats 24s`, `!stats 7g`, `!stats 30g` (en fazla 30 gün; `s` = saat, `g` = gün).
+  - Platform detayı: `!stats instagram`, `!stats 7g instagram` veya `!platform instagram 30g` → o platformun toplam/başarı oranı, dosya-boyut, ortalama süre, kullanıcı/sunucu sayısı ve en çok kullananlar.
+- `!info` / `!profil` / `!me` → kendi işlem özetiniz (`!info 7g` ile aralık). `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
 - `!metrics` / `!durum` → sağlayıcı ve highlight bucket özeti.
 - `!bakim` → bakım modu durumu; `!bakim ac` / `!bakim kapat` ile aç/kapat. **Yalnızca `STATS_OWNER_ID`**. Bakım açıkken sahip dışındaki kullanıcıların yeni indirmeleri engellenir (panelde “Bakım: Açık” görünür).
 
@@ -169,7 +171,9 @@ Komut satırından:
 
 ```powershell
 .\.venv\Scripts\python.exe -m media_bot.request_log
+.\.venv\Scripts\python.exe -m media_bot.request_log --range 7g
 .\.venv\Scripts\python.exe -m media_bot.request_log --hours 168
+.\.venv\Scripts\python.exe -m media_bot.request_log --platform instagram --range 30g
 .\.venv\Scripts\python.exe -m media_bot.request_log --user 123456789012345678
 ```
 

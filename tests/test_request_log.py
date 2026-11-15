@@ -4,7 +4,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from media_bot.request_log import RequestLog
+from media_bot.request_log import RequestLog, parse_range, range_label, resolve_platform
 
 
 def record(log, *, user_id=1, guild_id=10, platform="instagram", outcome="success", **kwargs):
@@ -62,6 +62,53 @@ class RequestLogTests(unittest.TestCase):
 
             open_panel = log.format_panel(24, maintenance=True)
             self.assertIn("Bakım: Açık", open_panel)
+
+    def test_range_and_platform_parsing(self):
+        self.assertEqual(parse_range("24s"), 24)
+        self.assertEqual(parse_range("7g"), 168)
+        self.assertEqual(parse_range("30g"), 720)
+        self.assertEqual(parse_range("12h"), 12)
+        self.assertEqual(parse_range("2w"), 336)
+        self.assertEqual(parse_range("7"), 7)
+        self.assertIsNone(parse_range("instagram"))
+        self.assertIsNone(parse_range("0g"))
+        self.assertEqual(parse_range("9999g"), 720)
+        self.assertEqual(range_label(24), "son 1 gün")
+        self.assertEqual(range_label(168), "son 1 hafta")
+        self.assertEqual(range_label(720), "son 30 gün")
+        self.assertEqual(range_label(6), "son 6 saat")
+        self.assertEqual(resolve_platform("twitter"), "x")
+        self.assertEqual(resolve_platform("müzik"), "spotify")
+        self.assertEqual(resolve_platform("IG"), "instagram")
+        self.assertIsNone(resolve_platform("myspace"))
+
+    def test_platform_detail_counts_only_that_platform(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = RequestLog(Path(temp) / "requests.sqlite3")
+            record(log, platform="instagram", outcome="success", elapsed_ms=1000,
+                   file_count=2, bytes=2048)
+            record(log, user_id=2, platform="instagram", outcome="failure")
+            record(log, platform="tiktok", outcome="success")
+
+            detail = log.platform_summary("instagram", 24)
+            self.assertEqual(detail["total"], 2)
+            self.assertEqual(detail["success"], 1)
+            self.assertEqual(detail["failure"], 1)
+            self.assertEqual(detail["users"], 2)
+            self.assertEqual(detail["guilds"], 1)
+            self.assertEqual(len(detail["top_users"]), 2)
+
+            text = log.format_platform("insta", 24)
+            self.assertIn("**instagram**", text)
+            self.assertIn("Toplam istek: 2", text)
+            self.assertIn("Başarı oranı: %50.0", text)
+            self.assertIn("En çok kullananlar", text)
+
+    def test_platform_detail_unknown_and_empty(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = RequestLog(Path(temp) / "requests.sqlite3")
+            self.assertIn("Bilinmeyen platform", log.format_platform("myspace", 24))
+            self.assertIn("işlem yok", log.format_platform("youtube", 24))
 
     def test_pending_record_can_be_updated(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -31,7 +31,7 @@ from .maintenance import MAINTENANCE, env_enabled
 from .metadata_fallback import Preview, fetch_preview, preview_embeds
 from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
-from .request_log import REQUESTS
+from .request_log import REQUESTS, parse_range, resolve_platform
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
 from .spotify import fetch_track, find_audio_source
@@ -291,9 +291,29 @@ class MediaBot(discord.Client):
         text = "\n".join(parts).strip()
         await self._reply(message, text[:1900])
 
-    async def _reply_request_stats(self, message: discord.Message) -> None:
-        role = "Yönetici" if _is_admin(message) else "Kullanıcı"
-        text = REQUESTS.format_panel(24, role=role, maintenance=MAINTENANCE.active)
+    async def _reply_request_stats(self, message: discord.Message, argument: str = "") -> None:
+        hours = 24
+        platform: str | None = None
+        for token in argument.split():
+            parsed = parse_range(token)
+            if parsed is not None:
+                hours = parsed
+                continue
+            key = resolve_platform(token)
+            if key:
+                platform = key
+                continue
+            await self._reply(
+                message,
+                f"Bilinmeyen argüman: `{token}`\n"
+                "Kullanım: `!stats` · `!stats 7g` · `!stats 30g` · `!stats 7g instagram`",
+            )
+            return
+        if platform:
+            text = REQUESTS.format_platform(platform, hours)
+        else:
+            role = "Yönetici" if _is_admin(message) else "Kullanıcı"
+            text = REQUESTS.format_panel(hours, role=role, maintenance=MAINTENANCE.active)
         await self._reply(message, text[:1900])
 
     async def _reply_maintenance(self, message: discord.Message, argument: str) -> None:
@@ -317,19 +337,28 @@ class MediaBot(discord.Client):
         await self._reply(message, "Kullanım: `!bakim` · `!bakim ac` · `!bakim kapat`")
 
     async def _reply_user_info(self, message: discord.Message, argument: str = "") -> None:
+        hours = 24
+        id_token = ""
+        for token in argument.split():
+            if token.startswith("<@") or token.startswith("<@!") or token.isdigit():
+                id_token = token
+                continue
+            parsed = parse_range(token)
+            if parsed is not None:
+                hours = parsed
         target = message.author
         target_name = getattr(target, "display_name", None) or getattr(target, "name", None) or str(target)
         if message.mentions:
             target = message.mentions[0]
             target_name = getattr(target, "display_name", None) or getattr(target, "name", None) or str(target)
-        elif argument.strip().isdigit():
-            target_id = int(argument.strip())
+        elif id_token.isdigit():
+            target_id = int(id_token)
             target = SimpleNamespace(id=target_id, display_name=str(target_id), name=str(target_id))
             target_name = str(target_id)
         if getattr(target, "id", None) != message.author.id and message.author.id != STATS_OWNER_ID:
             await self._reply(message, "Başka bir kullanıcının istatistiğini yalnızca bot sahibi görebilir.")
             return
-        text = REQUESTS.format_user(getattr(target, "id", 0), 24, display_name=target_name)
+        text = REQUESTS.format_user(getattr(target, "id", 0), hours, display_name=target_name)
         await self._reply(message, text[:1900])
 
     async def on_message(self, message: discord.Message) -> None:
@@ -340,12 +369,14 @@ class MediaBot(discord.Client):
         if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
             await self._reply_metrics(message)
             return
-        if content in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem",
-                       "!panel", "!admin", "!kontrol", "!kontrolpanel"}:
+        if content.split(maxsplit=1)[0] in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem",
+                                            "!panel", "!admin", "!kontrol", "!kontrolpanel",
+                                            "!platform", "!platformdetay", "!detay"}:
             if message.author.id != STATS_OWNER_ID:
                 await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
                 return
-            await self._reply_request_stats(message)
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_request_stats(message, argument)
             return
         if content.split(maxsplit=1)[0] in {"!info", "!profil", "!me", "!kimlik"}:
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""

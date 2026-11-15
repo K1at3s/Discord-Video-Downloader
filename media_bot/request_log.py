@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -14,6 +15,7 @@ from pathlib import Path
 LOG = logging.getLogger(__name__)
 OUTCOMES = {"success", "failure", "pending", "skipped"}
 RETENTION_SECONDS = 30 * 86400
+MAX_HOURS = RETENTION_SECONDS // 3600
 ISTANBUL = timezone(timedelta(hours=3))
 
 PLATFORM_LABELS = {
@@ -63,6 +65,59 @@ def _human_date(timestamp: float | None) -> str:
 def _pct(success: int, failure: int) -> float:
     done = success + failure
     return (100.0 * success / done) if done else 0.0
+
+
+_RANGE_RE = re.compile(r"(\d{1,4})\s*(saat|sa|s|hour|hours|h|gün|gun|g|day|days|d|hafta|w)?", re.I)
+
+
+def parse_range(value: str) -> int | None:
+    """Turn ``24s`` / ``7g`` / ``12h`` / ``30`` into an hour count (max 30 days)."""
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    match = _RANGE_RE.fullmatch(raw)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    if amount <= 0:
+        return None
+    unit = (match.group(2) or "s").lower()
+    if unit in {"saat", "sa", "s", "hour", "hours", "h"}:
+        hours = amount
+    elif unit in {"gün", "gun", "g", "day", "days", "d"}:
+        hours = amount * 24
+    else:  # hafta / w
+        hours = amount * 24 * 7
+    return max(1, min(hours, MAX_HOURS))
+
+
+def range_label(hours: int) -> str:
+    if hours % (24 * 7) == 0 and hours >= 24 * 7:
+        return f"son {hours // (24 * 7)} hafta"
+    if hours % 24 == 0 and hours >= 24:
+        return f"son {hours // 24} gün"
+    if hours == 1:
+        return "son 1 saat"
+    return f"son {hours} saat"
+
+
+def resolve_platform(value: str) -> str | None:
+    """Map a user-typed platform name/alias to the stored platform key."""
+    raw = (value or "").strip().lower().lstrip("@").rstrip("/")
+    if raw in PLATFORM_LABELS:
+        return raw
+    for key, label in PLATFORM_LABELS.items():
+        if raw == label:
+            return key
+    if raw in {"twitter", "xh", "tweet"}:
+        return "x"
+    if raw in {"ig", "insta"}:
+        return "instagram"
+    if raw in {"yt"}:
+        return "youtube"
+    if raw in {"müzik", "muzik", "music"}:
+        return "spotify"
+    return None
 
 
 class RequestLog:
@@ -306,6 +361,69 @@ class RequestLog:
             out["active_guilds"] = int(row[1] or 0) if row else 0
         return out
 
+    def platform_summary(self, platform: str, hours: int = 24) -> dict:
+        out: dict = {
+            "total": 0, "success": 0, "failure": 0, "pending": 0, "skipped": 0,
+            "files": 0, "bytes": 0, "avg_ms": 0, "last_at": None, "users": 0, "guilds": 0,
+            "top_users": [],
+        }
+        if self.path is None:
+            return out
+        cutoff = time.time() - hours * 3600
+        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+            out.update(self._totals(db, "WHERE platform = ? AND at >= ?", (platform, cutoff)))
+            row = db.execute(
+                "SELECT COUNT(DISTINCT user_id), COUNT(DISTINCT guild_id) "
+                "FROM request_log WHERE platform = ? AND at >= ? AND user_id IS NOT NULL",
+                (platform, cutoff),
+            ).fetchone()
+            out["users"] = int(row[0] or 0) if row else 0
+            out["guilds"] = int(row[1] or 0) if row else 0
+            out["top_users"] = [
+                {"user_id": int(user_id), "name": str(name or user_id), "total": int(total or 0)}
+                for user_id, name, total in db.execute(
+                    "SELECT user_id, MAX(user_name), COUNT(*) FROM request_log "
+                    "WHERE platform = ? AND at >= ? AND user_id IS NOT NULL "
+                    "GROUP BY user_id ORDER BY COUNT(*) DESC LIMIT 5",
+                    (platform, cutoff),
+                )
+            ]
+        return out
+
+    def format_platform(self, platform: str, hours: int = 24) -> str:
+        key = resolve_platform(platform)
+        label = PLATFORM_LABELS.get(key or platform, key or platform)
+        header = f"📊 **{label}** · {range_label(hours)}"
+        if key is None:
+            available = ", ".join(sorted(set(PLATFORM_LABELS.values())))
+            return f"Bilinmeyen platform: `{platform}`\nSeçenekler: {available}"
+        s = self.platform_summary(key, hours)
+        if s["total"] == 0:
+            return f"{header}\nBu platform için seçilen aralıkta işlem yok."
+        lines = [
+            header,
+            f"📥 Toplam istek: {s['total']}",
+            f"✅ Başarılı: {s['success']}",
+            f"❌ Başarısız: {s['failure']}",
+        ]
+        if s["pending"]:
+            lines.append(f"⏳ Bekleyen: {s['pending']}")
+        if s["skipped"]:
+            lines.append(f"⏭️ Atlanan: {s['skipped']}")
+        lines.extend([
+            f"📊 Başarı oranı: %{_pct(s['success'], s['failure']):.1f}",
+            f"📦 Dosya: {s['files']} · 💾 {_human_bytes(s['bytes'])}",
+            f"⚡ Ortalama süre: {_human_duration(s['avg_ms'])}",
+            f"👥 Kullanıcı: {s['users']} · 🗂️ Sunucu: {s['guilds']}",
+            f"🕒 Son işlem: {_human_date(s['last_at'])}",
+        ])
+        if s["top_users"]:
+            lines.append("")
+            lines.append("En çok kullananlar")
+            for user in s["top_users"]:
+                lines.append(f"• {user['name']} · {user['total']} iş")
+        return "\n".join(lines)
+
     def _format_platforms(self, rows: dict[str, dict], limit: int = 12) -> list[str]:
         lines: list[str] = []
         for platform, p in list(rows.items())[:limit]:
@@ -327,9 +445,10 @@ class RequestLog:
         s = self.user_summary(user_id, hours)
         name = display_name or str(user_id)
         if s["total"] == 0:
-            return f"{name} için son {hours} saatte işlem yok."
+            return f"{name} için {range_label(hours)} işlem yok."
         lines = [
             f"👤 {name} · {user_id}",
+            f"📅 Aralık: {range_label(hours)}",
             f"📥 Toplam istek: {s['total']}",
             f"✅ Başarılı: {s['success']}",
             f"❌ Başarısız: {s['failure']}",
@@ -348,6 +467,7 @@ class RequestLog:
         s = self.global_summary(hours)
         lines = [
             "🛡️ Yönetim Paneli",
+            f"📅 Aralık: {range_label(hours)}",
             f"🏷️ Rol: {role}",
             "💎 Premium: —",
             f"👥 Toplam kullanıcı: {s['users']}",
@@ -396,17 +516,25 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="İşlem/indirme isteği kayıt özeti.")
     parser.add_argument("--db", type=Path, default=Path("data/request_log.sqlite3"))
     parser.add_argument("--hours", type=int, default=24)
+    parser.add_argument("--range", default=None, help="24s / 7g / 30g gibi aralık")
     parser.add_argument("--user", type=int, default=None)
+    parser.add_argument("--platform", default=None)
     args = parser.parse_args()
+    hours = parse_range(args.range) if args.range else None
+    if hours is None:
+        hours = max(1, min(args.hours, MAX_HOURS))
     if not args.db.is_file():
         print("Henüz işlem kaydı yok. Bot çalıştıktan sonra tekrar deneyin.")
         return
     log = RequestLog(args.db, initialize=False)
-    if args.user is not None:
-        print(log.format_user(args.user, args.hours))
+    if args.platform:
+        print(log.format_platform(args.platform, hours))
         return
-    print(log.format_panel(args.hours))
-    rows = log.recent(args.hours, limit=8)
+    if args.user is not None:
+        print(log.format_user(args.user, hours))
+        return
+    print(log.format_panel(hours))
+    rows = log.recent(hours, limit=8)
     if rows:
         print()
         print("Son işlemler:")
