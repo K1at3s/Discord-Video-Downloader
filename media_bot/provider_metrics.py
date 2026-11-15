@@ -44,6 +44,9 @@ class ProviderMetrics:
             db.execute("CREATE INDEX IF NOT EXISTS provider_attempts_at ON provider_attempts(at)")
             db.execute("CREATE TABLE IF NOT EXISTS provider_winners ("
                        "at REAL NOT NULL, platform TEXT NOT NULL, provider TEXT NOT NULL)")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(provider_winners)")}
+            if "variant" not in columns:
+                db.execute("ALTER TABLE provider_winners ADD COLUMN variant TEXT NOT NULL DEFAULT ''")
             db.execute("CREATE INDEX IF NOT EXISTS provider_winners_at ON provider_winners(at)")
             self._cleanup(db, time.time())
             self.path = path
@@ -70,33 +73,40 @@ class ProviderMetrics:
         except (OSError, sqlite3.Error) as exc:
             LOG.warning("Provider metrics could not be stored: %s", exc)
 
-    def record_winner(self, platform: str, provider: str) -> None:
-        LOG.info("provider_winner platform=%s provider=%s", platform, provider)
+    def record_winner(self, platform: str, provider: str, variant: str = "") -> None:
+        LOG.info("provider_winner platform=%s provider=%s variant=%s", platform, provider, variant or "-")
         if self.path is None:
             return
         try:
             with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
                 self._cleanup(db, time.time())
-                db.execute("INSERT INTO provider_winners VALUES (?, ?, ?)",
-                           (time.time(), platform, provider))
+                db.execute("INSERT INTO provider_winners (at, platform, provider, variant) VALUES (?, ?, ?, ?)",
+                           (time.time(), platform, provider, (variant or "")[:40]))
         except (OSError, sqlite3.Error) as exc:
             LOG.warning("Provider winner could not be stored: %s", exc)
 
-    def last_winner(self, platform: str, hours: float = 24) -> str | None:
-        """Most recent winning provider for a platform, for fast-path ordering."""
+    def last_winner(self, platform: str, hours: float = 24, *, variant: str = "") -> str | None:
+        """Most recent winning provider for a platform/variant, for fast-path ordering."""
         if self.path is None:
             return None
         try:
             with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
                 row = db.execute(
-                    "SELECT provider FROM provider_winners WHERE platform = ? AND at >= ? "
+                    "SELECT provider FROM provider_winners WHERE platform = ? AND variant = ? AND at >= ? "
                     "ORDER BY at DESC LIMIT 1",
-                    (platform, time.time() - hours * 3600),
+                    (platform, (variant or "")[:40], time.time() - hours * 3600),
                 ).fetchone()
         except sqlite3.Error as exc:
             LOG.warning("Provider winner could not be read: %s", exc)
             return None
-        return str(row[0]) if row else None
+        if not row:
+            return None
+        provider = str(row[0])
+        # Cache paths record suffixed names such as "indownio-cache"; they are
+        # not real providers, so normalise them for the fast path.
+        if provider.endswith("-cache"):
+            provider = provider[: -len("-cache")]
+        return provider
 
     def report(self, hours: int = 24) -> list[tuple[str, str, dict[str, int]]]:
         if self.path is None:

@@ -41,6 +41,17 @@ class MetricsFormatTests(unittest.TestCase):
             self.assertEqual(m.last_winner("youtube"), "yt-dlp")
             self.assertEqual(m.last_winner("instagram"), "indown")
 
+    def test_last_winner_separates_variants_and_strips_cache_suffix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            m = ProviderMetrics(Path(temp) / "m.sqlite3")
+            m.record_winner("youtube", "cobalt", "mp3")
+            m.record_winner("youtube", "yt-dlp", "720")
+            m.record_winner("instagram", "indownio-cache", "highlight")
+            self.assertEqual(m.last_winner("youtube", variant="mp3"), "cobalt")
+            self.assertEqual(m.last_winner("youtube", variant="720"), "yt-dlp")
+            self.assertIsNone(m.last_winner("youtube", variant="360"))
+            self.assertEqual(m.last_winner("instagram", variant="highlight"), "indownio")
+
     def test_format_text_includes_quota_summary(self):
         with tempfile.TemporaryDirectory() as temp:
             m = ProviderMetrics(Path(temp) / "m.sqlite3")

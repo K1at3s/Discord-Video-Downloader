@@ -43,8 +43,8 @@ class ProviderMetricsTests(unittest.TestCase):
             self.assertEqual(metrics.report()[0][2]["p95_ms"], 400)
             with closing(sqlite3.connect(path)) as db, db:
                 db.execute("UPDATE provider_attempts SET at = ?", (time.time() - 15 * 86400,))
-                db.execute("INSERT INTO provider_winners VALUES (?, ?, ?)",
-                           (time.time() - 15 * 86400, "tiktok", "direct"))
+                db.execute("INSERT INTO provider_winners (at, platform, provider, variant) VALUES (?, ?, ?, ?)",
+                           (time.time() - 15 * 86400, "tiktok", "direct", ""))
             ProviderMetrics(path)
             self.assertEqual(metrics.report(), [])
 

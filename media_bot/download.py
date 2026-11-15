@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from . import provider_memory
 from .circuit_breaker import BREAKERS, provider_fault
 from .cobalt import download_cobalt
 from .cookiefile import netscape_jar
@@ -40,6 +43,22 @@ def looks_private(error: str) -> bool:
 
 class DownloadError(Exception):
     pass
+
+
+def provider_variant(link: PostLink) -> str:
+    """Short context key so a reel and a story learn providers separately."""
+    path = urlsplit(link.url).path.lower()
+    if link.platform == "instagram":
+        if "highlights" in path:
+            return "highlight"
+        if "/stories/" in path:
+            return "story"
+        if "/reel" in path or "/reels" in path:
+            return "reel"
+        return "post"
+    if link.platform == "threads":
+        return "short" if re.search(r"/(?:share|t|s)/", link.url) else "post"
+    return ""
 
 
 def media_files(folder: Path, max_bytes: int) -> list[Path]:
@@ -363,10 +382,23 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         MEDIA_CACHE.put(link.platform, link.url, bool(cookie_file), provider, src_files)
 
     async def _success(files: list[Path], provider: str) -> tuple[list[Path], str]:
-        await asyncio.to_thread(METRICS.record_winner, link.platform, provider)
+        await asyncio.to_thread(METRICS.record_winner, link.platform, provider, provider_variant(link))
         await asyncio.to_thread(_cache_store, files, provider)
         await _finish((files, provider))
         return files, provider
+
+    async def race_providers(names: tuple[str, ...]) -> tuple[list[Path], str] | None:
+        """Preferred provider first; hedge with the rest only if it is slow/fails."""
+        variant = provider_variant(link)
+        key = f"{link.platform}:{variant}" if variant else link.platform
+        preferred = await provider_memory.preferred(key, link.platform, variant)
+        result = await first_success(names, attempt, stagger=0, priority=preferred,
+                                     grace=provider_memory.hedge_seconds())
+        if result is not None:
+            provider_memory.remember(key, result[1])
+        else:
+            provider_memory.forget(key)
+        return result
 
     try:
         if canonical and "/share/p/" in original_link.url:
@@ -479,7 +511,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                     if claimed and user_id is not None and HIGHLIGHTS.user_quota:
                         await HIGHLIGHTS.user_quota.arelease(user_id)
                     providers = tuple(name for name in providers if name not in {"indown", "indownio"})
-                    result = await first_success(providers, attempt, stagger=0)
+                    result = await race_providers(providers)
                     if result is not None:
                         return await _success(result[0], result[1])
                     if oversize:
@@ -502,7 +534,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 if result is not None:
                     return await _success(result[0], result[1])
                 providers = tuple(name for name in providers if name != first)
-        result = await first_success(providers, attempt, stagger=0)
+        result = await race_providers(providers)
         if result is not None:
             return await _success(result[0], result[1])
         if oversize:

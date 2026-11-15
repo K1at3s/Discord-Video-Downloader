@@ -66,6 +66,7 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `YTDLP_REMOTE_EJS` | `0` | `1` olursa YouTube `yt-dlp` yedeği gerektiğinde GitHub’dan EJS betiği indirebilir; varsayılan kapalıdır |
 | `MAX_LINKS_PER_MESSAGE` | `3` | Tek mesajda işlenen bağlantı sayısı; en fazla 10 |
 | `MAX_CONCURRENT_JOBS` | `2` | Mesaj ve YouTube düğmesi işleri için toplam eşzamanlı sınır; en fazla 10 |
+| `PROVIDER_HEDGE_SECONDS` | `8` | Son başarılı sağlayıcı tek başına denenir; bu süre içinde bitmezse diğer sağlayıcılar devreye girer. `0` = beklemeden yarış (YouTube MP3 varsayılanı `5`) |
 | `DATABASE_PATH` | `data/bot.sqlite3` | +18 kotası ve highlight quota/cache durumu için SQLite dosyası |
 | `COBALT_API_URL` | Boş | İsteğe bağlı Cobalt adresi, örn. `http://127.0.0.1:9000/` |
 | `COBALT_API_KEY` | Boş | Cobalt örneği gerektiriyorsa anahtar |
@@ -111,6 +112,7 @@ docker compose -f cobalt.compose.yaml up -d
 - Reddit metni alınabildiğinde koyu PNG sayfalarına çizilir. Birden çok sayfa aynı Media Gallery mesajındadır; 10 sayfadan sonra yeni mesaj açılır. [Reddit RSS desteğini 13 Kasım 2026'da sonlandıracağını duyurdu](https://www.reddit.com/r/modnews/comments/1xuj8jp/mod_monthly_your_november_2026_newsletter_is_here/); arşiv yedekleri yeni gönderilerde gecikebilir. Reddit desteği bu yüzden en iyi çabadır.
 - YouTube düğmelerini yalnızca bağlantıyı gönderen kişi kullanır. Düğmeler beş dakika geçerlidir. MP3 128 kb/sn hazırlanır; dosya embed/kart içine konmaz, **doğrudan normal ek** olarak ve `Sanatçı - Şarkı.mp3` adıyla gönderilir. Çözünürlük düğmeleri üst sınırdır.
 - YouTube sağlayıcı seçimi öğrenmelidir: son başarılı sağlayıcı (kalite bazında) önce **tek başına** denenir; yalnızca başarısız olursa veya 5 sn (video 8 sn) içinde bitmezse diğerleri devreye girer. Böylece her istekte tüm sağlayıcılar denenmez.
+- Bu öğrenme tüm platformlarda geçerlidir: son kazanan sağlayıcı bağlam bazında (Instagram reel/story/highlight/post, Threads kısa/gönderi, diğer platformlar) hatırlanır ve `data/provider_metrics.sqlite3` içindeki `provider_winners` tablosunda saklanır. Bot yeniden başlasa da tercih korunur; `PROVIDER_HEDGE_SECONDS` (varsayılan 8) içinde yanıt gelmezse diğer sağlayıcılar devreye girer.
 - Spotify'ın korumalı ses akışı indirilmez. Bot parça adı, sanatçı ve süreyle YouTube'da tam uzunlukta kayıt arar; uygun eşleşmeyi MP3 dosyası olarak **doğrudan ekler**, embed kullanmaz. Kayıplı kaynaktan gerçek FLAC üretilemeyeceği için FLAC etiketi kullanılmaz.
 - Sağlayıcılar kısa aralıklarla yarışır; ilk eksiksiz sonuç alınır. Platformlar ve web servisleri değişebildiğinden kesintisiz başarı garantisi yoktur. Sağlayıcı sırası ve araştırma notları [PROVIDERS.md](PROVIDERS.md) içindedir.
 - Instagram gönderilerinde açıklamadaki like/yorum sayıları ve `@kullanıcı · tarih` ön eki tırnakları yok sayılarak kırpılır; hikâye ve öne çıkan kartlarında açıklama yok sayılır, **`@kullanıcı · tarihi`** ile footer verilir. Kaynak düğmesi footerda aynı kartın yanındadır.

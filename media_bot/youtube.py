@@ -19,14 +19,12 @@ from .circuit_breaker import BREAKERS, provider_fault
 from .direct_providers import _stream, allowed_media_url
 from .download import DownloadError, _run
 from .links import PostLink
+from . import provider_memory
 from .race import first_success
 from .provider_metrics import METRICS
 
 LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
-# Last provider that actually delivered, per choice, so repeat requests can go
-# straight to it instead of racing every provider again.
-_PREFERRED: dict[str, str] = {}
 
 
 async def fetch_youtube_meta(url: str) -> tuple[str | None, str | None]:
@@ -286,13 +284,13 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
         return None
 
     key = f"youtube:{choice}"
-    preferred = _PREFERRED.get(key) or await asyncio.to_thread(METRICS.last_winner, "youtube")
+    preferred = await provider_memory.preferred(key, "youtube", choice)
     # Preferred provider runs alone; the rest only start if it fails or is slow.
-    grace = 5.0 if choice == "mp3" else 8.0
+    grace = provider_memory.hedge_seconds(5.0 if choice == "mp3" else 8.0)
     result = await first_success(providers, attempt, priority=preferred, grace=grace)
     if result is not None:
-        _PREFERRED[key] = result[1]
-        await asyncio.to_thread(METRICS.record_winner, "youtube", result[1])
+        provider_memory.remember(key, result[1])
+        await asyncio.to_thread(METRICS.record_winner, "youtube", result[1], choice)
         return result
-    _PREFERRED.pop(key, None)
+    provider_memory.forget(key)
     raise DownloadError("Seçilen format alınamadı. " + "; ".join(failures)[:400])

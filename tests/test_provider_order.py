@@ -91,7 +91,7 @@ class InstagramStoryRouteTests(unittest.IsolatedAsyncioTestCase):
         async def fake_web(_name, _link, _folder, _max_bytes, _cookie=None):
             return 0, "no usable media"
 
-        async def fake_first_success(providers, attempt, stagger=0):
+        async def fake_first_success(providers, attempt, stagger=0, **_kwargs):
             order.append(tuple(providers))
             return None
 
@@ -115,7 +115,7 @@ class InstagramStoryRouteTests(unittest.IsolatedAsyncioTestCase):
         async def fake_web(_name, _link, _folder, _max_bytes, _cookie=None):
             return 0, "no usable media"
 
-        async def fake_first_success(providers, attempt, stagger=0):
+        async def fake_first_success(providers, attempt, stagger=0, **_kwargs):
             order.append(tuple(providers))
             return None
 
