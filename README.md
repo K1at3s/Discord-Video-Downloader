@@ -6,14 +6,14 @@ Discord sohbetindeki sosyal medya bağlantılarını algılayıp medyayı ve eri
 
 | Platform | Bağlantı | Çıktı |
 | --- | --- | --- |
-| Instagram | Gönderi, reel, video | Fotoğraf/video galerisi, açıklama, kaynak düğmesi |
+| Instagram | Gönderi, reel, video, hikâye, öne çıkanlar | Fotoğraf/video galerisi, açıklama, kaynak düğmesi. Hikâyeler çerezsiz InDown ile, öne çıkanlar anahtarsız `indown.io` görüntüleyicisiyle alınır. |
 | TikTok | Video, fotoğraf | Medya galerisi, açıklama, kaynak düğmesi |
 | Facebook | Gönderi, reel, video, fotoğraf | Medya galerisi, erişilebilen açıklama, kaynak düğmesi |
 | X / Twitter | Tweet | Koyu tweet PNG kartı; varsa medya ayrıca |
 | Reddit | Gönderi ve `/r/.../s/...` kısa bağlantısı | Metin koyu PNG sayfalarında; varsa medya ayrıca |
 | YouTube | Video, Shorts, canlı yayın bağlantısı | MP3, 360p, 720p, 1080p düğmeleri |
 | Spotify | Tekil parça | Eşleşen YouTube kaydından MP3, doğrudan dosya eki |
-| Threads | Gönderi ve `/share/` bağlantısı | Normal gönderileri önce çerezsiz `threadsdl` web sağlayıcısıyla indirir; gerekirse oturumlu sayfa çözümlemesini dener. `/share/` bağlantısını `COOKIE_FILE` içindeki oturumla gerçek gönderiye çözer; çerez olmadan bu kısa bağlantı biçimi çalışmayabilir. |
+| Threads | Gönderi ve `/share/`, `/t/` ve `/s/` bağlantısı | Normal gönderileri önce çerezsiz `threadsdl` web sağlayıcısıyla indirir; gerekirse oturumlu sayfa çözümlemesini dener. `/share/` bağlantısını `COOKIE_FILE` içindeki oturumla gerçek gönderiye çözer; çerez olmadan bu kısa bağlantı biçimi çalışmayabilir. Yeni `/s/<token>` kısa biçimi (`highlight:<id>`, `post:<id>` gibi) da aynı akışla çözülür. |
 | Douyin | Video, not | `yt-dlp` ve doğrudan sayfa yolları |
 | Weibo | Gönderi | `gallery-dl` ve `yt-dlp` |
 | Streamable | Video | Streamable API ve `yt-dlp` |
@@ -66,11 +66,20 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `YTDLP_REMOTE_EJS` | `0` | `1` olursa YouTube `yt-dlp` yedeği gerektiğinde GitHub’dan EJS betiği indirebilir; varsayılan kapalıdır |
 | `MAX_LINKS_PER_MESSAGE` | `3` | Tek mesajda işlenen bağlantı sayısı; en fazla 10 |
 | `MAX_CONCURRENT_JOBS` | `2` | Mesaj ve YouTube düğmesi işleri için toplam eşzamanlı sınır; en fazla 10 |
-| `DATABASE_PATH` | `data/bot.sqlite3` | +18 kotası için SQLite dosyası |
+| `DATABASE_PATH` | `data/bot.sqlite3` | +18 kotası ve highlight quota/cache durumu için SQLite dosyası |
 | `COBALT_API_URL` | Boş | İsteğe bağlı Cobalt adresi, örn. `http://127.0.0.1:9000/` |
 | `COBALT_API_KEY` | Boş | Cobalt örneği gerektiriyorsa anahtar |
 | `COOKIE_FILE` | Boş | Erişim hakkınız olan hesabın çerez dosyası: Netscape biçimi veya tarayıcıdaki `Cookie:` başlığının tek satırlık ham hâli. Threads `/share/` bağlantıları ve oturum gerektiren gönderiler için kullanılır. |
 | `GALLERY_DL_RS_PATH` | Boş | İsteğe bağlı `gallery-dl-rs` program yolu |
+| `HIGHLIGHT_CACHE_TTL_HOURS` | `12` | Çerezsiz Instagram highlight sonuçları için disk önbelleği süresi (saat) |
+| `HIGHLIGHT_CACHE_MAX_MB` | `512` | Highlight disk önbelleği toplam boyut sınırı (MB) |
+| `HIGHLIGHT_HOURLY_LIMIT` | `4` | Kullanıcı başı saatlik highlight indirme limiti |
+| `HIGHLIGHT_DAILY_LIMIT` | `15` | Kullanıcı başı günlük highlight indirme limiti |
+| `HIGHLIGHT_HEALTHCHECK_ENABLED` | `1` | indown.io highlight sağlık kontrolünü aç/kapat (`0` kapatır) |
+| `HIGHLIGHT_HEALTHCHECK_HOURS` | `24` | Sağlık kontrolü aralığı (saat); kontrol indirmesiz resolve yapar ve kota harcayabilir |
+| `HIGHLIGHT_HEALTHCHECK_RESERVE` | `3` | Sağlık kontrolünün kullanıcılar için ayırdığı minimum bucket jetonu |
+| `MEDIA_CACHE_TTL_MINUTES` | `20` | Aynı URL tekrarları için kısa süreli genel medya önbelleği süresi (dakika) |
+| `MEDIA_CACHE_MAX_MB` | `1024` | Genel medya önbelleği toplam boyut sınırı (MB) |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
 
@@ -98,7 +107,9 @@ docker compose -f cobalt.compose.yaml up -d
 - YouTube düğmelerini yalnızca bağlantıyı gönderen kişi kullanır. Düğmeler beş dakika geçerlidir. MP3 128 kb/sn hazırlanır. Çözünürlük düğmeleri üst sınırdır.
 - Spotify'ın korumalı ses akışı indirilmez. Bot parça adı, sanatçı ve süreyle YouTube'da tam uzunlukta kayıt arar; uygun eşleşmeyi MP3 dosyası olarak **doğrudan ekler**, embed kullanmaz. Kayıplı kaynaktan gerçek FLAC üretilemeyeceği için FLAC etiketi kullanılmaz.
 - Sağlayıcılar kısa aralıklarla yarışır; ilk eksiksiz sonuç alınır. Platformlar ve web servisleri değişebildiğinden kesintisiz başarı garantisi yoktur. Sağlayıcı sırası ve araştırma notları [PROVIDERS.md](PROVIDERS.md) içindedir.
-- Dosyalar geçici klasörde işlenip Discord'a gönderildikten sonra silinir. Bot medya arşivi tutmaz.
+- Instagram gönderilerinde açıklamadaki like/yorum sayıları ve `@kullanıcı · tarih` ön eki tırnakları yok sayılarak kırpılır; hikâye ve öne çıkan kartlarında açıklama yok sayılır, **`@kullanıcı · tarihi`** ile footer verilir. Kaynak düğmesi footerda aynı kartın yanındadır.
+- Çerezsiz Instagram öne çıkanlar `indown.net` ile denenir, gerekirse `indown.io`ya düşer (`~20/saat` IP kotası). Aynı highlight tekrarlarında disk önbelleği ve eşzamanlı istek birleştirme (single-flight) kota tüketimini azaltır; kullanıcı başı saatlik/günlük limitler ve kalan süreli kota mesajları uygulanır. indown.io kotası tamamen sınırsız değildir.
+- Dosyalar geçici klasörde işlenip Discord'a gönderildikten sonra silinir. Bot medya arşivi tutmaz (highlight ve kısa süreli genel medya önbellekleri TTL/boyut sınırıyla temizlenir).
 - Aynı kullanıcı için aynı anda yalnızca bir iş çalışır; sonraki istek sıraya alınır ve geçici durum mesajı gösterilir. Farklı kullanıcılar `MAX_CONCURRENT_JOBS` sınırına kadar paralel işlenir. Aynı bağlantıyı farklı kullanıcılar gönderirse şu anda ayrı indirme yapılır.
 
 ## +18 koruması ve SQLite
@@ -114,7 +125,7 @@ Reddit'in +18 durumu doğrulanamazsa bağlantı işlenmez. Bu denetim **Reddit'e
 | `media_bot/bot.py` | Discord olayları, mesaj akışı, Components V2, yapılandırma |
 | `media_bot/links.py` | Bağlantı tanıma ve normalleştirme |
 | `media_bot/download.py`, `race.py`, `circuit_breaker.py` | Sağlayıcı sırası, indirme yarışı ve arızalı sağlayıcıyı geçici atlama |
-| `media_bot/direct_providers.py`, `web_providers.py`, `cobalt.py`, `gendownload.py` | İndirme sağlayıcıları |
+| `media_bot/direct_providers.py`, `web_providers.py`, `cobalt.py`, `gendownload.py`, `indownio.py` | İndirme sağlayıcıları |
 | `media_bot/youtube.py`, `youtube_view.py`, `spotify.py` | YouTube seçenekleri ve Spotify eşleştirmesi |
 | `media_bot/reddit_post.py`, `reddit_card.py`, `adult.py` | Reddit metni/kartları ve +18 kotası |
 | `media_bot/x_card.py`, `x_story.py` | Tweet verisi ve görseli |
@@ -134,7 +145,9 @@ Bot çalışırken her sağlayıcı denemesinin sonucu ve süresi `data/provider
 .\.venv\Scripts\python.exe -m media_bot.provider_metrics
 ```
 
-`DATABASE_PATH` farklı bir klasörü gösteriyorsa raporda `--db <o klasör>\provider_metrics.sqlite3` kullanın. `--hours 48` gibi bir aralık seçilebilir. Rapor platform ve sağlayıcı başına deneme sayısını, kazanan sağlayıcıyı ve başarılı denemelerin p50/p95 sürelerini gösterir. 14 günden eski ölçümler bot açılışında ve çalışırken günde bir kez temizlenir. Rapor ağ isteği yapmaz; sabit örnek bağlantılarla otomatik indirme testi etkin değildir.
+`DATABASE_PATH` farklı bir klasörü gösteriyorsa raporda `--db <o klasör>\provider_metrics.sqlite3` kullanın. `--hours 48` veya `--hours 168` gibi bir aralık seçilebilir. Rapor platform ve sağlayıcı başına deneme sayısını, kazanan sağlayıcıyı, `quota`/`skipped`/arıza ayrımını ve başarılı denemelerin p50/p95 sürelerini gösterir (`quota` = gerçek kota aşımı; `skipped` = cooldown/reserve vb. atlanan denemeler). 14 günden eski ölçümler bot açılışında ve çalışırken günde bir kez temizlenir. Rapor ağ isteği yapmaz.
+
+Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat ve 7 gün özetini (varsa highlight bucket durumu dahil) görebilirsiniz.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"

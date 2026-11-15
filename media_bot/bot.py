@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,15 +20,18 @@ from .adult import AdultQuota, channel_is_nsfw, istanbul_day, reddit_adult_statu
 from .bluesky import download_bluesky_media, fetch_bluesky_post
 from .captions import display_chunks, fetch_caption
 from .download import DownloadError, download_media
+from .highlight_state import HIGHLIGHTS, format_wait
+from .indownio import is_rate_limited_message, resolve_indownio
 from .links import PostLink, find_links, parse_link
 from .job_slots import JobSlots
 from .limits import attachment_batches
 from .metadata_fallback import Preview, fetch_preview, preview_embeds
+from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
 from .spotify import fetch_track, find_audio_source
-from .threads_links import resolve_threads_link
+from .threads_links import highlight_post_link, resolve_threads_link
 from .x_card import create_card, fetch_post
 from .youtube_view import YoutubeChoiceView
 from .youtube import download_youtube
@@ -49,6 +53,36 @@ def _reel_caption(caption: str) -> tuple[str, str | None, str | None]:
     if not match:
         return caption.strip(), None, None
     return caption[:match.start()].rstrip(), match.group(1), match.group(2).strip()
+
+
+_MONTHS_TR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz",
+              "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
+
+
+def _instagram_date(media_id: str) -> str | None:
+    """Decode the creation date from an Instagram media id (no request needed)."""
+    if not media_id:
+        return None
+    try:
+        moment = datetime.fromtimestamp(((int(media_id) >> 23) + 1314220021721) / 1000)
+    except (ValueError, OverflowError, OSError):
+        return None
+    if not 2011 <= moment.year <= datetime.now().year + 1:
+        return None
+    return f"{moment.day} {_MONTHS_TR[moment.month - 1]} {moment.year}"
+
+
+def _instagram_story_meta(url: str) -> str | None:
+    """`@handle · date` footer for a story link; captions are never shown."""
+    match = re.fullmatch(r"/stories/([^/]+)/(\d*)/?", urlsplit(url).path, re.I)
+    if not match or match.group(1).lower() == "highlights":
+        return None
+    username = match.group(1)
+    parts = [f"[@{username}](https://www.instagram.com/{username}/)"]
+    posted = _instagram_date(match.group(2))
+    if posted:
+        parts.append(posted)
+    return " · ".join(parts)
 
 
 def _quote(text: str) -> str:
@@ -103,16 +137,19 @@ def media_gallery_view(platform: str, files: list[Path], caption: str | None,
         )))
     for path in audio:
         children.append(discord.ui.File(f"attachment://{path.name}"))
+    story_meta = _instagram_story_meta(source_url) if platform == "instagram" else None
     if caption:
         children.append(discord.ui.Separator())
         if platform == "facebook" and caption.rstrip().endswith(("...", "…")):
             children.append(discord.ui.TextDisplay("-# Açıklama önizlemesi"))
         children.append(discord.ui.TextDisplay(_quote(caption[:3600])))
-    elif part == 1 and show_missing_caption:
+    elif part == 1 and not story_meta and show_missing_caption:
         children.append(discord.ui.TextDisplay("-# Gönderi açıklamasına erişilemiyor."))
-    children.append(discord.ui.ActionRow(
-        discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=source_url)
-    ))
+    source = discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=source_url)
+    if story_meta:
+        children.append(discord.ui.Section(discord.ui.TextDisplay("-# " + story_meta), accessory=source))
+    else:
+        children.append(discord.ui.ActionRow(source))
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(discord.ui.Container(*children, accent_color=COLORS[platform]))
     return view
@@ -170,12 +207,86 @@ class MediaBot(discord.Client):
         self.cobalt_key = cobalt_key
         self.gallery_rs_path = gallery_rs_path
         self.adult_quota = AdultQuota(database_path or Path(__file__).resolve().parent.parent / "data" / "bot.sqlite3")
+        self._health_task: asyncio.Task | None = None
+        self._health_skips = 0
 
     async def on_ready(self) -> None:
         LOG.info("Hazır: %s (%s)", self.user, self.user.id if self.user else "?")
+        if (HIGHLIGHTS.enabled and HIGHLIGHTS.health_check_enabled
+                and (self._health_task is None or self._health_task.done())):
+            self._health_task = asyncio.create_task(self._highlight_health_loop())
+
+    async def _highlight_health_loop(self) -> None:
+        # Periodic health check: natgeo highlight 18023864549864045 (expects ~8 videos).
+        # Resolve-only (no media download). Consumes indown.io quota once per run.
+        interval = HIGHLIGHTS.health_check_interval
+        reserve = HIGHLIGHTS.health_check_reserve
+        await asyncio.sleep(interval)
+        url = "https://www.instagram.com/stories/highlights/18023864549864045/"
+        link = PostLink("instagram", url)
+        while not self.is_closed() and HIGHLIGHTS.enabled and HIGHLIGHTS.health_check_enabled:
+            try:
+                # Reserve tokens for user requests; this probe also consumes quota.
+                if HIGHLIGHTS.bucket.remaining() < reserve:
+                    wait = HIGHLIGHTS.bucket.wait_seconds()
+                    self._health_skips += 1
+                    METRICS.record("instagram", "indownio-health", "skipped", 0)
+                    LOG.info("Highlight health check skipped: low quota reserve (~%s kaldı)", format_wait(wait))
+                    if self._health_skips >= 3:
+                        LOG.warning("Highlight health check art arda %d kez atlandı; servis durumu doğrulanamıyor", self._health_skips)
+                    await asyncio.sleep(interval)
+                    continue
+                allowed, wait = HIGHLIGHTS.bucket.try_consume()
+                if not allowed:
+                    self._health_skips += 1
+                    METRICS.record("instagram", "indownio-health", "skipped", 0)
+                    LOG.info("Highlight health check skipped: quota reserve exhausted (~%s kaldı)", format_wait(wait))
+                    if self._health_skips >= 3:
+                        LOG.warning("Highlight health check art arda %d kez atlandı; servis durumu doğrulanamıyor", self._health_skips)
+                else:
+                    self._health_skips = 0
+                    count, detail = await resolve_indownio(link)
+                    if detail and is_rate_limited_message(detail):
+                        HIGHLIGHTS.bucket.mark_exhausted()
+                        METRICS.record("instagram", "indownio-health", "quota", 0)
+                        LOG.info("Highlight health check: quota/rate-limited by service")
+                    elif detail:
+                        METRICS.record("instagram", "indownio-health", "error", 0)
+                        LOG.warning("Highlight health check failed: %s", detail)
+                    else:
+                        ok = count >= 8
+                        METRICS.record("instagram", "indownio-health", "success" if ok else "error", 0)
+                        LOG.info("Highlight health check: resolved=%d ok=%s", count, ok)
+            except Exception as exc:
+                self._health_skips = 0
+                METRICS.record("instagram", "indownio-health", "error", 0)
+                LOG.warning("Highlight health check failed: %s", exc)
+            await asyncio.sleep(interval)
+
+    async def _reply_metrics(self, message: discord.Message) -> None:
+        parts = [
+            METRICS.format_text(24),
+            "",
+            METRICS.format_text(168, limit=8),
+        ]
+        if HIGHLIGHTS.enabled and HIGHLIGHTS.bucket:
+            remaining = HIGHLIGHTS.bucket.remaining()
+            wait = HIGHLIGHTS.bucket.wait_seconds()
+            parts.append("")
+            parts.append(
+                f"Highlight bucket (indown.io, lokal tahmin): kalan={remaining} "
+                f"bekleme={format_wait(wait) if wait > 0 else '0 dk'} "
+                f"health={'açık' if HIGHLIGHTS.health_check_enabled else 'kapalı'}"
+            )
+        text = "\n".join(parts).strip()
+        await self._reply(message, text[:1900])
 
     async def on_message(self, message: discord.Message) -> None:
         if message.author.bot or not message.guild or (self.channel_ids and message.channel.id not in self.channel_ids):
+            return
+        content = (message.content or "").strip().lower()
+        if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
+            await self._reply_metrics(message)
             return
         links = find_links(message.content, self.max_links)
         if not links:
@@ -198,13 +309,17 @@ class MediaBot(discord.Client):
                         pass
                 for link in links:
                     try:
-                        await self._handle_link(message, link)
+                        await self._handle_link(message, link, status_message=queue_notice)
                     except discord.Forbidden:
                         LOG.warning("Kanal için mesaj veya dosya gönderme izni yok: %s", message.channel.id)
                         return
                     except discord.HTTPException as exc:
                         LOG.warning("Discord upload error: %s", exc)
-                        await self._reply(message, "Dosya Discord'a yüklenemedi. Kanal izinlerini ve yükleme sınırını kontrol edin.")
+                        text = str(exc).lower()
+                        if exc.status == 413 or "entity too large" in text or "larger than" in text or "40005" in text:
+                            await self._reply(message, "Dosya Discord yükleme sınırını aşıyor (sunucu/kanal limiti nedeniyle gönderilemedi).")
+                        else:
+                            await self._reply(message, "Dosya Discord'a yüklenemedi. Kanal izinlerini ve yükleme sınırını kontrol edin.")
                     except Exception:
                         LOG.exception("Unexpected error processing %s", link.platform)
                         await self._reply(message, "Bu bağlantı işlenirken beklenmeyen bir hata oluştu.")
@@ -226,24 +341,41 @@ class MediaBot(discord.Client):
             return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
                                        mention_author=False, suppress_embeds=embed is None)
 
-    async def _handle_link(self, message: discord.Message, link: PostLink) -> None:
+    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+        async def set_status(text: str) -> None:
+            if not status_message:
+                return
+            try:
+                await status_message.edit(content=text)
+            except discord.HTTPException:
+                pass
+
         if link.platform == "threads":
+            await set_status("⏳ Bağlantı çözümleniyor...")
             link = await resolve_threads_link(link, self.cookie_file) or link
+            if highlight := highlight_post_link(link.url):
+                # Threads-only short links like /s/highlight:<ig_id> point at an
+                # Instagram highlight album, so hand off to the Instagram flow.
+                link = highlight
         if link.platform == "spotify":
-            await self._handle_spotify(message, link)
+            await set_status("⏳ Parça hazırlanıyor...")
+            await self._handle_spotify(message, link, status_message=status_message)
             return
         if link.platform == "bluesky":
-            await self._handle_bluesky(message, link)
+            await set_status("⏳ Gönderi alınıyor...")
+            await self._handle_bluesky(message, link, status_message=status_message)
             return
         if link.platform == "reddit":
-            await self._handle_reddit(message, link)
+            await set_status("⏳ Gönderi hazırlanıyor...")
+            await self._handle_reddit(message, link, status_message=status_message)
             return
         if link.platform == "youtube":
             view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu")
             view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
             return
         if link.platform == "x":
-            await self._handle_x(message, link)
+            await set_status("⏳ Gönderi hazırlanıyor...")
+            await self._handle_x(message, link, status_message=status_message)
             return
         caption_task = asyncio.create_task(fetch_caption(link, self.cookie_file))
 
@@ -258,8 +390,10 @@ class MediaBot(discord.Client):
             folder = Path(tmp)
             media: list[Path] = []
             error: DownloadError | None = None
+            user_id = getattr(getattr(message, "author", None), "id", None)
+            await set_status("⏳ Medya indiriliyor...")
             try:
-                media, _ = await download_media(link, folder, self.upload_bytes, self.cookie_file, self.cobalt_url, self.cobalt_key, self.gallery_rs_path)
+                media, _ = await download_media(link, folder, self.upload_bytes, self.cookie_file, self.cobalt_url, self.cobalt_key, self.gallery_rs_path, user_id=user_id)
             except DownloadError as exc:
                 error = exc
             except BaseException:
@@ -276,7 +410,7 @@ class MediaBot(discord.Client):
                     for embed in preview_embeds(link, preview, caption):
                         await self._reply(message, embed=embed, view=source_button(link.url))
                 else:
-                    if link.platform == "threads" and re.search(r"/(?:share|t)/", link.url):
+                    if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
                         await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
                     else:
                         await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
@@ -312,7 +446,15 @@ class MediaBot(discord.Client):
                 return preview
         return Preview()
 
-    async def _handle_bluesky(self, message: discord.Message, link: PostLink) -> None:
+    async def _handle_bluesky(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
+        async def set_status(text: str) -> None:
+            if not status_message:
+                return
+            try:
+                await status_message.edit(content=text)
+            except discord.HTTPException:
+                pass
+
         try:
             post = await fetch_bluesky_post(link)
         except httpx.HTTPError as exc:
@@ -334,6 +476,7 @@ class MediaBot(discord.Client):
                 await self._reply(message, "Günlük +18 indirme hakkını kullandın.")
                 return
         with tempfile.TemporaryDirectory(prefix="discord-bluesky-") as tmp:
+            await set_status("⏳ Medya indiriliyor...")
             try:
                 media = await download_bluesky_media(post, Path(tmp), self.upload_bytes)
             except OSError as exc:
@@ -356,7 +499,7 @@ class MediaBot(discord.Client):
                                                                    link.url, part=index,
                                                                    show_missing_caption=False))
 
-    async def _handle_reddit(self, message: discord.Message, link: PostLink) -> None:
+    async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
         preview = (await self._reddit_message_preview(message, link)
                    if not link.post_id else Preview())
         subreddit_prefix = re.match(r"^r/[^ ]+ · ", preview.title or "")
@@ -377,13 +520,13 @@ class MediaBot(discord.Client):
             if not await self.adult_quota.aclaim(message.author.id, day):
                 await self._reply(message, "Günlük +18 indirme hakkını kullandın. Yeni hak Türkiye saatiyle gece yarısında açılır.")
                 return
-            await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint)
+            await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
             return
-        await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint)
+        await MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
 
     async def _deliver_reddit(self, message: discord.Message, link: PostLink,
                               post: RedditPost | None, preview: Preview,
-                              title_hint: str | None) -> None:
+                              title_hint: str | None, status_message: discord.Message | None = None) -> None:
         source_url = post.url if post else link.url
         with tempfile.TemporaryDirectory(prefix="discord-reddit-") as tmp:
             if not post and not preview.has_content:
@@ -415,11 +558,18 @@ class MediaBot(discord.Client):
                 await self._reply(message, "Reddit gönderi bilgisi alınamadı.", view=source_button(link.url))
             if post and post.is_self is True:
                 return
+            if status_message:
+                try:
+                    await status_message.edit(content="⏳ Medya indiriliyor...")
+                except discord.HTTPException:
+                    pass
             try:
                 media_link = parse_link(source_url) or link
+                user_id = getattr(getattr(message, "author", None), "id", None)
                 media, _ = await download_media(
                     media_link, Path(tmp), self.upload_bytes, self.cookie_file,
                     self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
+                    user_id=user_id,
                 )
             except DownloadError:
                 return
@@ -428,11 +578,16 @@ class MediaBot(discord.Client):
                                   view=media_gallery_view("reddit", batch, None, source_url,
                                                           part=index, show_missing_caption=False))
 
-    async def _handle_spotify(self, message: discord.Message, link: PostLink) -> None:
+    async def _handle_spotify(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
         try:
             track = await fetch_track(link)
             source = await find_audio_source(track)
             with tempfile.TemporaryDirectory(prefix="discord-spotify-") as tmp:
+                if status_message:
+                    try:
+                        await status_message.edit(content="⏳ Ses indiriliyor...")
+                    except discord.HTTPException:
+                        pass
                 file, provider = await download_youtube(
                     source, Path(tmp), "mp3", self.upload_bytes,
                     self.cookie_file, self.cobalt_url, self.cobalt_key,
@@ -445,15 +600,22 @@ class MediaBot(discord.Client):
         except DownloadError as exc:
             await self._reply(message, f"Spotify parçası indirilemedi: {exc}", view=source_button(link.url))
 
-    async def _handle_x(self, message: discord.Message, link: PostLink) -> None:
+    async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> None:
         with tempfile.TemporaryDirectory(prefix="discord-x-") as tmp:
             folder = Path(tmp)
             post = await fetch_post(link.post_id or "")
             media_task = None
             if post is None or _has_media(post):
+                user_id = getattr(getattr(message, "author", None), "id", None)
+                if status_message:
+                    try:
+                        await status_message.edit(content="⏳ Medya indiriliyor...")
+                    except discord.HTTPException:
+                        pass
                 media_task = asyncio.create_task(download_media(
                     link, folder / "media", self.upload_bytes, self.cookie_file,
                     self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
+                    user_id=user_id,
                 ))
             try:
                 card_sent = False
@@ -525,6 +687,21 @@ def main() -> None:
             raise ValueError("GALLERY_DL_RS_PATH mevcut bir programı göstermeli")
         database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
         METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
+        MEDIA_CACHE.configure(
+            database_path.parent / "media_cache",
+            ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 20, 1440) * 60,
+            max_bytes=_positive_int("MEDIA_CACHE_MAX_MB", 1024, 10240) * 1024 * 1024,
+        )
+        HIGHLIGHTS.configure(
+            database_path,
+            cache_ttl=_positive_int("HIGHLIGHT_CACHE_TTL_HOURS", 12, 168) * 3600,
+            cache_max_bytes=_positive_int("HIGHLIGHT_CACHE_MAX_MB", 512, 4096) * 1024 * 1024,
+            daily_limit=_positive_int("HIGHLIGHT_DAILY_LIMIT", 15, 200),
+            hourly_limit=_positive_int("HIGHLIGHT_HOURLY_LIMIT", 4, 50),
+            health_check_enabled=os.getenv("HIGHLIGHT_HEALTHCHECK_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
+            health_check_interval=_positive_int("HIGHLIGHT_HEALTHCHECK_HOURS", 24, 168) * 3600,
+            health_check_reserve=_positive_int("HIGHLIGHT_HEALTHCHECK_RESERVE", 3, 20),
+        )
         bot = MediaBot(
             channel_ids=channels,
             upload_bytes=_positive_int("MAX_UPLOAD_MB", 20, 500) * 1024 * 1024,

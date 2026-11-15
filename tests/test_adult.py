@@ -56,7 +56,7 @@ class AdultGateTests(unittest.IsolatedAsyncioTestCase):
         async def fetch(*_args):
             return post
 
-        async def deliver(*_args):
+        async def deliver(*_args, **_kwargs):
             delivered.append(True)
 
         with tempfile.TemporaryDirectory() as folder:

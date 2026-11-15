@@ -13,7 +13,7 @@ from contextlib import closing
 from pathlib import Path
 
 LOG = logging.getLogger(__name__)
-OUTCOMES = {"success", "fault", "no_media", "private", "error", "unavailable", "skipped", "cancelled"}
+OUTCOMES = {"success", "fault", "no_media", "private", "error", "unavailable", "skipped", "cancelled", "quota"}
 RETENTION_SECONDS = 14 * 86400
 
 
@@ -114,6 +114,48 @@ class ProviderMetrics:
         return [(platform, provider, dict(groups[(platform, provider)]))
                 for platform, provider in sorted(groups)]
 
+    def quota_exhaustion_summary(self, hours: int = 24) -> list[tuple[str, str, int, int]]:
+        """Return (platform, provider, quota_events, total_attempted) for providers with quota events."""
+        if self.path is None:
+            return []
+        cutoff = time.time() - hours * 3600
+        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+            rows = db.execute(
+                "SELECT platform, provider, "
+                "SUM(CASE WHEN outcome='quota' THEN 1 ELSE 0 END) AS quota_events, "
+                "COUNT(*) AS total "
+                "FROM provider_attempts WHERE at >= ? "
+                "GROUP BY platform, provider HAVING quota_events > 0 "
+                "ORDER BY quota_events DESC",
+                (cutoff,),
+            ).fetchall()
+        return [(str(p), str(pr), int(q), int(t)) for p, pr, q, t in rows]
+
+    def format_text(self, hours: int = 24, limit: int = 12) -> str:
+        rows = self.report(hours)
+        if not rows:
+            return f"Son {hours} saatte sağlayıcı denemesi yok."
+        lines = [f"Sağlayıcı özeti (son {hours} saat)"]
+        for platform, provider, group in rows[:limit]:
+            attempted = sum(count for outcome, count in group.items()
+                            if outcome in OUTCOMES - {"skipped", "cancelled"})
+            success = group.get("success", 0)
+            rate = 100 * success / attempted if attempted else 0
+            lines.append(
+                f"- {platform}/{provider}: kazan={group.get('wins', 0)} başarı={success}/{attempted} "
+                f"(%{rate:.0f}) kota={group.get('quota', 0)} arıza={group.get('fault', 0)} "
+                f"atlandı={group.get('skipped', 0)}"
+            )
+        quota_rows = self.quota_exhaustion_summary(hours)
+        if quota_rows:
+            lines.append("Kota aşımı (karar metriği: sadece quota):")
+            for platform, provider, quota_events, total in quota_rows[:6]:
+                pct = 100 * quota_events / total if total else 0
+                lines.append(f"- {platform}/{provider}: {quota_events}/{total} (%{pct:.1f})")
+        if len(rows) > limit:
+            lines.append(f"... +{len(rows) - limit} satır")
+        return "\n".join(lines)
+
     def summary(self, hours: int = 24) -> list[tuple[str, str, str, int, int]]:
         if self.path is None:
             return []
@@ -137,19 +179,27 @@ def main() -> None:
     if not args.db.is_file():
         print("Henüz sağlayıcı ölçümü yok. Bot çalıştıktan sonra tekrar deneyin.")
         return
-    rows = ProviderMetrics(args.db, initialize=False).report(args.hours)
+    metrics = ProviderMetrics(args.db, initialize=False)
+    rows = metrics.report(args.hours)
     if not rows:
         print("Bu sürede sağlayıcı denemesi yok.")
         return
-    print("Platform / Sağlayıcı             Kazanan  Başarı  Deneme  Başarı %  Arıza  Atlandı  p50 ms  p95 ms")
+    print("Platform / Sağlayıcı             Kazanan  Başarı  Deneme  Başarı %  Arıza  Kota  Atlandı  p50 ms  p95 ms")
     for platform, provider, group in rows:
         attempted = sum(count for outcome, count in group.items()
                         if outcome in OUTCOMES - {"skipped", "cancelled"})
         success = group.get("success", 0)
         rate = 100 * success / attempted if attempted else 0
         print(f"{platform}/{provider:28} {group.get('wins', 0):7} {success:7} {attempted:7} {rate:8.1f} "
-              f"{group.get('fault', 0):6} {group.get('skipped', 0):8} "
+              f"{group.get('fault', 0):6} {group.get('quota', 0):5} {group.get('skipped', 0):8} "
               f"{group.get('p50_ms', 0):7} {group.get('p95_ms', 0):7}")
+    quota_rows = metrics.quota_exhaustion_summary(args.hours)
+    if quota_rows:
+        print()
+        print("Kota aşımı sıklığı (sağlayıcı bazında):")
+        for platform, provider, quota_events, total in quota_rows:
+            pct = 100 * quota_events / total if total else 0
+            print(f"  {platform}/{provider}: {quota_events} kota olayı / {total} deneme (%{pct:.1f})")
 
 
 if __name__ == "__main__":
