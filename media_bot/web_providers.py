@@ -37,15 +37,21 @@ class _MediaHTML(HTMLParser):
         self.anchors: list[dict[str, str | set[str]]] = []
         self.images: list[dict[str, str | set[str]]] = []
         self.current: dict[str, str | set[str]] | None = None
+        # Media cards (indown.net) group a poster and the real file in one
+        # `download-items` block, so anchors are tagged with their card.
+        self.block = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
         classes = set((values.get("class") or "").split())
         ancestors = set().union(*(entry[1] for entry in self.stack)) if self.stack else set()
         context = classes | ancestors
+        if tag == "div" and "download-items" in classes:
+            self.block += 1
         if tag == "a":
             self.current = {"href": html.unescape(values.get("href") or ""),
-                            "title": values.get("title") or "", "classes": context, "text": ""}
+                            "title": values.get("title") or "", "classes": context,
+                            "text": "", "block": str(self.block)}
         elif tag == "img":
             self.images.append({"src": html.unescape(values.get("src") or ""), "classes": context})
         if tag not in {"img", "br", "hr", "input", "meta", "link"}:
@@ -68,15 +74,22 @@ class _MediaHTML(HTMLParser):
 def _indown_urls(markup: str) -> list[tuple[str, str]]:
     parser = _MediaHTML()
     parser.feed(markup)
-    found: list[tuple[str, str]] = []
+    blocks: dict[str, list[tuple[str, str]]] = {}
     for item in parser.anchors:
         url = str(item["href"])
         if "download-items" not in item["classes"] or not allowed_media_url(url, "indown"):
             continue
         label = (str(item["text"]) + " " + str(item["title"])).lower()
         kind = "video" if re.search(r"video|mp4|reel", label) or re.search(r"\.(?:mp4|mov|webm)(?:\?|$)", url, re.I) else "photo"
-        if url not in [entry[0] for entry in found]:
-            found.append((url, kind))
+        entries = blocks.setdefault(str(item["block"]), [])
+        if url not in [entry[0] for entry in entries]:
+            entries.append((url, kind))
+    found: list[tuple[str, str]] = []
+    for entries in blocks.values():
+        # A story or video card lists the poster image and the video itself;
+        # the poster is only a still of the video, not a separate item.
+        videos = [entry for entry in entries if entry[1] == "video"]
+        found.extend(videos[:1] if videos else entries)
     return found[:MAX_MEDIA_ITEMS]
 
 

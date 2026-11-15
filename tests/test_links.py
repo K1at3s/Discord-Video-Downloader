@@ -8,11 +8,15 @@ class LinkTests(unittest.TestCase):
         cases = [
             ("https://x.com/user/status/123456789?ref=abc", "x"),
             ("https://www.instagram.com/reel/AbC123/?igsh=test", "instagram"),
+            ("https://www.instagram.com/stories/natgeo/4029782063186981984/", "instagram"),
+            ("https://www.instagram.com/stories/highlights/17919681140787123/", "instagram"),
             ("https://www.tiktok.com/@someone/video/123456789", "tiktok"),
             ("https://www.facebook.com/share/p/abc123/", "facebook"),
             ("https://www.reddit.com/r/test/comments/abc123/a_post/", "reddit"),
             ("https://www.reddit.com/r/opencode/s/ykPZRiQsc9", "reddit"),
             ("https://www.threads.com/@nasa/post/DaDiBxclMT9", "threads"),
+            ("https://www.threads.com/s/highlight:18129769924466391", "threads"),
+            ("https://www.threads.com/t/BAaTVei4V4", "threads"),
             ("https://www.douyin.com/video/1234567890123456789", "douyin"),
             ("https://m.weibo.cn/status/P3abcde", "weibo"),
             ("https://streamable.com/hn8hq", "streamable"),
@@ -33,6 +37,38 @@ class LinkTests(unittest.TestCase):
         for url in ["https://x.com/user", "https://x.com.evil.test/user/status/123", "http://127.0.0.1/status/123", "https://instagram.com/user/", "https://bsky.app/profile/example.bsky.social"]:
             with self.subTest(url=url):
                 self.assertIsNone(parse_link(url))
+
+    def test_instagram_short_link_decodes_to_highlight(self):
+        link = parse_link("https://www.instagram.com/s/aGlnaGxpZ2h0OjE4MTI5NzY5OTI0NDY2Mzk1")
+        self.assertIsNotNone(link)
+        self.assertEqual(link.platform, "instagram")
+        self.assertEqual(
+            link.url,
+            "https://www.instagram.com/stories/highlights/18129769924466395/",
+        )
+
+    def test_instagram_short_link_with_query_stripped(self):
+        link = parse_link(
+            "https://www.instagram.com/s/aGlnaGxpZ2h0OjE4MTI5NzY5OTI0NDY2Mzk1?story_media_id=3744752622361205836_72875966683&srtk=N2h4MDU0dTF4MTJy"
+        )
+        self.assertIsNotNone(link)
+        self.assertEqual(link.platform, "instagram")
+        self.assertEqual(
+            link.url,
+            "https://www.instagram.com/stories/highlights/18129769924466395/",
+        )
+
+    def test_instagram_short_link_trailing_slash(self):
+        link = parse_link("https://www.instagram.com/s/aGlnaGxpZ2h0OjE4MTI5NzY5OTI0NDY2Mzk1/")
+        self.assertIsNotNone(link)
+        self.assertEqual(
+            link.url,
+            "https://www.instagram.com/stories/highlights/18129769924466395/",
+        )
+
+    def test_instagram_short_link_invalid_token(self):
+        self.assertIsNone(parse_link("https://www.instagram.com/s/notvalidbase64!!!"))
+        self.assertIsNone(parse_link("https://www.instagram.com/s/"))
 
     def test_youtube_canonical_and_playlist_rejection(self):
         link = parse_link("https://www.youtube.com/watch?v=jNQXAC9IVRw&list=PL123")

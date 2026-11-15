@@ -98,7 +98,7 @@ class RedditPreviewTests(unittest.IsolatedAsyncioTestCase):
         async def full_post(*_args):
             return post
 
-        async def media(_link, folder: Path, *_args):
+        async def media(_link, folder: Path, *_args, **_kwargs):
             file = folder / "video.mp4"
             file.write_bytes(b"media")
             return [file], "test"

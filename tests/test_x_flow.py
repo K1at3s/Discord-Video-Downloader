@@ -21,7 +21,7 @@ class XFlowTests(unittest.IsolatedAsyncioTestCase):
         async def card(_post, output, _footer):
             output.write_bytes(b"PNG")
 
-        async def download(_link, folder, *_args):
+        async def download(_link, folder, *_args, **_kwargs):
             await asyncio.sleep(0.01)
             folder.mkdir(parents=True, exist_ok=True)
             file = folder / "media.mp4"
@@ -50,7 +50,7 @@ class XFlowTests(unittest.IsolatedAsyncioTestCase):
         async def card(_post, output, _footer):
             output.write_bytes(b"PNG")
 
-        async def download(*_args):
+        async def download(*_args, **_kwargs):
             await asyncio.sleep(10)
             raise AssertionError("Text-only media task should be cancelled")
 
@@ -74,7 +74,7 @@ class XFlowTests(unittest.IsolatedAsyncioTestCase):
         async def card(_post, output, _footer):
             output.write_bytes(b"PNG")
 
-        async def download(*args):
+        async def download(*args, **_kwargs):
             calls.append(args)
             return [], "test"
 

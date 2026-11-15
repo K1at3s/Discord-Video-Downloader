@@ -1,10 +1,11 @@
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from media_bot.bot import MediaBot, _instagram_story_meta, media_gallery_view
 from media_bot.captions import _page_caption, caption_messages, display_chunks, fetch_caption
-from media_bot.bot import MediaBot, media_gallery_view
 from media_bot.links import PostLink
 
 
@@ -24,6 +25,15 @@ class CaptionTests(unittest.TestCase):
         page = ('<meta property="og:description" content="16K likes, 48 comments - bgyet on '
                 'November 12, 2026: &quot;Metin. Sondaki söz: &quot;alıntı&quot;.&quot;">')
         self.assertEqual(_page_caption(page, "instagram"), 'Metin. Sondaki söz: "alıntı".')
+
+    def test_instagram_truncated_caption_drops_engagement_prefix(self):
+        page = ('<meta property="og:description" content="837K likes, 3,863 comments - user on '
+                'November 10, 2026: &quot;Happy DREAM Day!!! 💙🩵">')
+        self.assertEqual(_page_caption(page, "instagram"), "Happy DREAM Day!!! 💙🩵")
+        truncated = ('<meta property="og:description" content="837K likes, 3,863 comments - user on '
+                     'November 10, 2026: &quot;Happy DREAM Day!!! 💙🩵🩵💙🎈🏆...">')
+        self.assertEqual(_page_caption(page, "instagram"), "Happy DREAM Day!!! 💙🩵")
+        self.assertTrue(_page_caption(truncated, "instagram").startswith("Happy DREAM Day"))
 
     def test_threads_login_promo_is_not_post_text(self):
         page = '<meta property="og:description" content="Join Threads to share ideas, ask questions, post random thoughts.">'
@@ -48,7 +58,29 @@ class CaptionTests(unittest.TestCase):
         self.assertEqual("".join(display_chunks(caption)), caption)
 
 
+class InstagramStoryCardTests(unittest.TestCase):
+    def test_story_meta_has_handle_and_date(self):
+        moment = datetime(2026, 6, 15, 12, 0)
+        media_id = int(((moment.timestamp() * 1000) - 1314220021721)) << 23
+        meta = _instagram_story_meta(f"https://www.instagram.com/stories/nasa/{media_id}/")
+        self.assertTrue(meta.startswith("[@nasa](https://www.instagram.com/nasa/"))
+        self.assertIn("Haziran 2026", meta)
+
+    def test_story_meta_keeps_handle_only_without_media_id(self):
+        self.assertEqual(_instagram_story_meta("https://www.instagram.com/stories/natgeo/"),
+                         "[@natgeo](https://www.instagram.com/natgeo/)")
+
+    def test_story_meta_is_none_for_highlights(self):
+        self.assertIsNone(_instagram_story_meta("https://www.instagram.com/stories/highlights/17919681140787123/"))
+        self.assertIsNone(_instagram_story_meta("https://www.instagram.com/p/Dfk9rkrD33b/"))
+
+
 class FacebookCaptionFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_story_links_have_no_caption(self):
+        link = PostLink("instagram", "https://www.instagram.com/stories/natgeo/4029782063186981984/")
+        with patch("media_bot.captions._fetch", side_effect=AssertionError("network used")):
+            self.assertIsNone(await fetch_caption(link))
+
     async def test_preview_is_used_when_complete_caption_is_unavailable(self):
         async def fake_fetch(_link, route, _cookie=None):
             return "WhatsApp kalici olarak..." if route == "page" else None
@@ -68,7 +100,7 @@ class FacebookCaptionFallbackTests(unittest.IsolatedAsyncioTestCase):
 
 class CaptionDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_media_is_sent_when_caption_provider_raises(self):
-        async def download(_link, folder, *_args):
+        async def download(_link, folder, *_args, **_kwargs):
             folder.mkdir(parents=True, exist_ok=True)
             media = folder / "photo.jpg"
             media.write_bytes(b"photo")

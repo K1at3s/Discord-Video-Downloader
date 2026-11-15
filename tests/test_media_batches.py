@@ -83,7 +83,7 @@ class BotBatchTests(unittest.IsolatedAsyncioTestCase):
         async def caption(_link, _cookie_file):
             return "Gönderi açıklaması"
 
-        async def download(_link, folder, *_args):
+        async def download(_link, folder, *_args, **_kwargs):
             files = []
             for index in range(1, 24):
                 file = folder / f"image_{index}.jpg"

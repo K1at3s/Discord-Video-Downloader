@@ -48,6 +48,18 @@ def _post_link(raw: str) -> PostLink | None:
     return None
 
 
+HIGHLIGHT_RE = re.compile(r"/(?:s|t|share)/highlight:(\d+)/?", re.IGNORECASE)
+
+
+def highlight_post_link(url: str) -> PostLink | None:
+    """Map a Threads highlight short link (`/s/highlight:<ig_id>`) to Instagram."""
+    if not url:
+        return None
+    if match := HIGHLIGHT_RE.fullmatch(urlsplit(url).path):
+        return PostLink("instagram", f"https://www.instagram.com/stories/highlights/{match.group(1)}/")
+    return None
+
+
 class _Canonical(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -110,11 +122,11 @@ async def resolve_threads_link(link: PostLink, cookie_file: Path | None = None,
         return None
     if post := _post_link(link.url):
         return post
-    if not cookie_file and re.fullmatch(r"/(?:share|t)/[A-Za-z0-9_-]+/?", urlsplit(link.url).path):
+    if not cookie_file and re.fullmatch(r"/(?:share|t|s)/[A-Za-z0-9_.:-]+/?", urlsplit(link.url).path):
         # No cookie file: don't hit threads.com; let the provider resolve the
         # share link itself (e.g. threadsdl / vette).
         return link
-    if not re.fullmatch(r"/(?:share|t)/[A-Za-z0-9_-]+/?", urlsplit(link.url).path):
+    if not re.fullmatch(r"/(?:share|t|s)/[A-Za-z0-9_.:-]+/?", urlsplit(link.url).path):
         return None
 
     async def inspect(http: httpx.AsyncClient) -> PostLink | None:

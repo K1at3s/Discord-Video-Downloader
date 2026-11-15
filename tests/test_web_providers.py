@@ -33,6 +33,19 @@ class WebProviderParsingTests(unittest.TestCase):
             ("https://cdninstagram.com/b.jpg", "photo"),
         ])
 
+    def test_indown_drops_video_poster_but_keeps_album_order(self):
+        page = """
+        <div class="download-items">
+          <a href="https://cdninstagram.com/poster.jpg">Download Image</a>
+          <a href="https://cdninstagram.com/story.mp4">Download Video</a>
+        </div>
+        <div class="download-items"><a href="https://cdninstagram.com/photo.jpg">Download Photo</a></div>
+        """
+        self.assertEqual(_indown_urls(page), [
+            ("https://cdninstagram.com/story.mp4", "video"),
+            ("https://cdninstagram.com/photo.jpg", "photo"),
+        ])
+
     def test_tiktokio_keeps_slides_but_not_music(self):
         page = """
         <div class="images-grid">

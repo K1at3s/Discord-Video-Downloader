@@ -5,11 +5,46 @@ from tempfile import TemporaryDirectory
 import httpx
 
 from media_bot.links import parse_link
-from media_bot.threads_links import _threads_cookies, _threads_scoped, resolve_threads_link
+from media_bot.threads_links import (
+    _threads_cookies,
+    _threads_scoped,
+    highlight_post_link,
+    resolve_threads_link,
+)
 
 
 SHORT = "https://www.threads.com/share/BAaTVei4V4"
 POST = "https://www.threads.com/@zehrayahsii0/post/DfotDeOCJ1t"
+HIGHLIGHT_SHORT = "https://www.threads.com/s/highlight:18129769924466391"
+HIGHLIGHT_GROUPS = "https://www.threads.com/share/highlight:18129769924466391"
+
+
+class ThreadsHighlightTests(unittest.TestCase):
+    def test_highlight_short_link_maps_to_instagram_highlight(self):
+        link = highlight_post_link(HIGHLIGHT_SHORT)
+        self.assertIsNotNone(link)
+        self.assertEqual(link.platform, "instagram")
+        self.assertEqual(
+            link.url,
+            "https://www.instagram.com/stories/highlights/18129769924466391/",
+        )
+
+    def test_highlight_token_with_trailing_slash(self):
+        link = highlight_post_link("https://www.threads.com/s/highlight:18129769924466391/")
+        self.assertIsNotNone(link)
+        self.assertEqual(link.url, "https://www.instagram.com/stories/highlights/18129769924466391/")
+
+    def test_share_variant_is_supported(self):
+        link = highlight_post_link(HIGHLIGHT_GROUPS)
+        self.assertIsNotNone(link)
+        self.assertEqual(link.platform, "instagram")
+
+    def test_post_link_is_not_rewritten(self):
+        link = highlight_post_link(POST)
+        self.assertIsNone(link)
+
+    def test_empty_url(self):
+        self.assertIsNone(highlight_post_link(""))
 
 
 class ThreadsShareTests(unittest.IsolatedAsyncioTestCase):

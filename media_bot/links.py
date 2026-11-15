@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
@@ -18,6 +19,19 @@ class PostLink:
 
 def _host(hostname: str, domain: str) -> bool:
     return hostname == domain or hostname.endswith("." + domain)
+
+
+def _decode_instagram_short_token(token: str) -> str | None:
+    """Decode an Instagram /s/<token> short-link payload.
+
+    Instagram encodes values such as ``highlight:<ig_id>`` or
+    ``post:<shortcode>`` as URL-safe base64 without padding.
+    """
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded).decode("ascii", "ignore")
+    except (ValueError, base64.binascii.Error):
+        return None
 
 
 def parse_link(raw: str) -> PostLink | None:
@@ -40,6 +54,16 @@ def parse_link(raw: str) -> PostLink | None:
     elif _host(host, "instagram.com"):
         if re.fullmatch(r"/(?:p|reel|tv)/[\w-]+/?", path, re.I):
             return PostLink("instagram", clean)
+        if re.search(r"/stories/", path, re.I) or re.fullmatch(r"/story/[\w-]+/?", path, re.I) or re.search(r"/highlights/", path, re.I):
+            return PostLink("instagram", clean)
+        if match := re.fullmatch(r"/s/([A-Za-z0-9_-]+)/?", path, re.I):
+            decoded = _decode_instagram_short_token(match.group(1))
+            if decoded and decoded.startswith("highlight:"):
+                highlight_id = decoded.split(":", 1)[1]
+                return PostLink("instagram", f"https://www.instagram.com/stories/highlights/{highlight_id}/")
+            if decoded and decoded.startswith("post:"):
+                shortcode = decoded.split(":", 1)[1]
+                return PostLink("instagram", f"https://www.instagram.com/p/{shortcode}/")
     elif _host(host, "tiktok.com"):
         if re.fullmatch(r"/@[^/]+/(?:video|photo)/\d+/?", path, re.I) or (host in {"vm.tiktok.com", "vt.tiktok.com"} and re.fullmatch(r"/[\w-]+/?", path)):
             return PostLink("tiktok", clean)
@@ -63,7 +87,7 @@ def parse_link(raw: str) -> PostLink | None:
         if match or short or (host.endswith("redd.it") and re.fullmatch(r"/[a-z0-9]+/?", path, re.I)):
             return PostLink("reddit", clean, match.group(1) if match else None)
     elif _host(host, "threads.com") or _host(host, "threads.net"):
-        if re.fullmatch(r"/@[^/]+/post/[A-Za-z0-9_-]+(?:/media)?/?", path) or re.fullmatch(r"/(?:t|share)/[A-Za-z0-9_-]+/?", path):
+        if re.fullmatch(r"/@[^/]+/post/[A-Za-z0-9_-]+(?:/media)?/?", path) or re.fullmatch(r"/(?:t|share|s)/[A-Za-z0-9_.:-]+/?", path):
             return PostLink("threads", clean)
     elif host == "bsky.app":
         match = re.fullmatch(r"/profile/([A-Za-z0-9.:-]+)/post/([A-Za-z0-9]+)/*", path)

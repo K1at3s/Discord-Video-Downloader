@@ -38,8 +38,16 @@ def _page_caption(page: str, platform: str, *, allow_truncated: bool = False) ->
         description = values.get("og:description") or values.get("description") or ""
         # Instagram prefixes captions with engagement counts and an author, e.g.
         # `16K likes, 48 comments - user on November 12, 2026: "<caption>"`.
-        match = re.search(r"[\"“](.+)[\"”]\s*$", description, re.S)
-        return _clean(match.group(1) if match else description)
+        # The trailing quote is often missing when the caption is truncated, so
+        # strip the prefix itself instead of matching a quoted tail.
+        description = re.sub(r"^[\d.,]+[KMB]?\s+(?:likes?|views?|beğenme|görüntüleme)\b[^:]{0,120}:\s*",
+                             "", description, count=1, flags=re.I)
+        description = description.strip()
+        if description[:1] in {'"', "“"}:
+            description = description[1:]
+        if description[-1:] in {'"', "”"}:
+            description = description[:-1]
+        return _clean(description)
     description = values.get("og:description") or values.get("description") or values.get("twitter:description")
     cleaned = _clean(description)
     if platform == "threads" and cleaned and cleaned.lower().startswith("join threads to share ideas"):
@@ -129,6 +137,9 @@ async def _gallery_caption(link: PostLink, cookie_file: Path) -> str | None:
 
 
 async def fetch_caption(link: PostLink, cookie_file: Path | None = None) -> str | None:
+    if link.platform == "instagram" and re.search(r"/(?:stories|story|highlights)/", link.url, re.I):
+        # Story and highlight pages expose only profile counters, not a caption.
+        return None
     routes = {
         "instagram": ["page", "gendownload"],
         "facebook": ["page", "gendownload"],
