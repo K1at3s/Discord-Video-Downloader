@@ -125,7 +125,8 @@ class RequestLog:
         elapsed_ms: int = 0,
         file_count: int = 0,
         bytes: int = 0,
-    ) -> None:
+    ) -> int | None:
+        """Store one request row and return its id (for later updates)."""
         if outcome not in OUTCOMES:
             outcome = "failure"
         LOG.info(
@@ -133,11 +134,11 @@ class RequestLog:
             guild_id, user_id, platform, outcome, file_count, bytes, elapsed_ms, url, (detail or "")[:200],
         )
         if self.path is None:
-            return
+            return None
         try:
             with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
                 self._cleanup(db, time.time())
-                db.execute(
+                cursor = db.execute(
                     "INSERT INTO request_log "
                     "(at, guild_id, guild_name, channel_id, user_id, user_name, "
                     "platform, url, outcome, detail, elapsed_ms, file_count, bytes) "
@@ -158,8 +159,55 @@ class RequestLog:
                         max(0, int(bytes)),
                     ),
                 )
+                return int(cursor.lastrowid) if cursor.lastrowid else None
         except (OSError, sqlite3.Error) as exc:
             LOG.warning("Request log could not be stored: %s", exc)
+            return None
+
+    def update(
+        self,
+        record_id: int | None,
+        *,
+        outcome: str | None = None,
+        detail: str | None = None,
+        elapsed_ms: int | None = None,
+        file_count: int | None = None,
+        bytes: int | None = None,
+    ) -> bool:
+        """Update an existing row, e.g. link a pending YouTube choice to its result."""
+        if self.path is None or not record_id:
+            return False
+        if outcome is not None and outcome not in OUTCOMES:
+            outcome = "failure"
+        fields: list[str] = []
+        params: list[object] = []
+        if outcome is not None:
+            fields.append("outcome = ?")
+            params.append(outcome)
+        if detail is not None:
+            fields.append("detail = ?")
+            params.append((detail or "")[:300])
+        if elapsed_ms is not None:
+            fields.append("elapsed_ms = ?")
+            params.append(max(0, int(elapsed_ms)))
+        if file_count is not None:
+            fields.append("file_count = ?")
+            params.append(max(0, int(file_count)))
+        if bytes is not None:
+            fields.append("bytes = ?")
+            params.append(max(0, int(bytes)))
+        if not fields:
+            return False
+        try:
+            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+                cursor = db.execute(
+                    f"UPDATE request_log SET {', '.join(fields)} WHERE rowid = ?",
+                    (*params, int(record_id)),
+                )
+                return cursor.rowcount > 0
+        except (OSError, sqlite3.Error) as exc:
+            LOG.warning("Request log could not be updated: %s", exc)
+            return False
 
     def _totals(self, db: sqlite3.Connection, where: str, params: tuple) -> dict:
         row = db.execute(

@@ -353,11 +353,14 @@ class MediaBot(discord.Client):
                     outcome = "failure"
                     detail = ""
                     files: list[Path] = []
+                    pending_target = None
                     started = time.monotonic()
                     try:
                         result = await self._handle_link(message, link, status_message=queue_notice)
                         if isinstance(result, tuple):
-                            outcome, files = result
+                            outcome, files = result[0], result[1]
+                            if len(result) > 2:
+                                pending_target = result[2]
                         elif result in {"success", "failure", "pending", "skipped"}:
                             outcome = result
                         elif result is None:
@@ -398,7 +401,7 @@ class MediaBot(discord.Client):
                     finally:
                         file_count = len(files)
                         total_bytes = sum(p.stat().st_size for p in files if p.is_file())
-                        REQUESTS.record(
+                        record_id = REQUESTS.record(
                             guild_id=getattr(message.guild, "id", None),
                             guild_name=getattr(message.guild, "name", None),
                             channel_id=getattr(message.channel, "id", None),
@@ -412,6 +415,8 @@ class MediaBot(discord.Client):
                             file_count=file_count,
                             bytes=total_bytes,
                         )
+                        if pending_target is not None and record_id:
+                            pending_target.request_id = record_id
         finally:
             if queue_notice:
                 try:
@@ -430,7 +435,7 @@ class MediaBot(discord.Client):
             return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
                                        mention_author=False, suppress_embeds=embed is None)
 
-    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
+    async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]] | tuple[str, list[Path], YoutubeChoiceView]:
         async def set_status(text: str) -> None:
             if not status_message:
                 return
@@ -458,7 +463,7 @@ class MediaBot(discord.Client):
         if link.platform == "youtube":
             view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu")
             view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
-            return "pending", []
+            return "pending", [], view
         if link.platform == "x":
             await set_status("⏳ Gönderi hazırlanıyor...")
             return await self._handle_x(message, link, status_message=status_message)

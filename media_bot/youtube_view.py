@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+import time
 from pathlib import Path
 
 import discord
@@ -12,6 +13,7 @@ import discord
 from .captions import display_chunks, fetch_caption
 from .download import DownloadError
 from .links import PostLink
+from .request_log import REQUESTS
 from .youtube import download_youtube, video_height
 
 LOG = logging.getLogger(__name__)
@@ -40,12 +42,14 @@ class FormatButton(discord.ui.Button):
 
 
 class YoutubeChoiceView(discord.ui.LayoutView):
-    def __init__(self, *, bot, source_message: discord.Message, link: PostLink, title: str):
+    def __init__(self, *, bot, source_message: discord.Message, link: PostLink, title: str,
+                 request_id: int | None = None):
         super().__init__(timeout=300)
         self.bot = bot
         self.source_message = source_message
         self.link = link
         self.title = title
+        self.request_id = request_id
         self.prompt_message: discord.Message | None = None
         self.selected = False
         escaped = discord.utils.escape_markdown(title[:180])
@@ -70,6 +74,7 @@ class YoutubeChoiceView(discord.ui.LayoutView):
         self.selected = True
         await interaction.response.defer()
         self.stop()
+        started = time.monotonic()
         prompt = interaction.message
         if prompt:
             try:
@@ -117,6 +122,14 @@ class YoutubeChoiceView(discord.ui.LayoutView):
                             await self.bot._reply(self.source_message,
                                                   view=media_gallery_view("youtube", [], text_chunk,
                                                                           self.link.url, part=index))
+                        REQUESTS.update(
+                            self.request_id,
+                            outcome="success",
+                            detail=f"youtube:{choice}:{provider}",
+                            elapsed_ms=int((time.monotonic() - started) * 1000),
+                            file_count=1,
+                            bytes=file.stat().st_size if file.is_file() else 0,
+                        )
                     finally:
                         if not caption_task.done():
                             caption_task.cancel()
@@ -129,9 +142,16 @@ class YoutubeChoiceView(discord.ui.LayoutView):
             LOG.info("YouTube choice %s delivered via %s", choice, provider)
         except (DownloadError, discord.HTTPException, OSError, asyncio.TimeoutError) as exc:
             LOG.warning("YouTube choice %s failed: %s", choice, exc)
+            REQUESTS.update(
+                self.request_id,
+                outcome="failure",
+                detail=f"youtube:{choice}:{str(exc)[:180]}",
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
             if prompt:
                 retry = YoutubeChoiceView(bot=self.bot, source_message=self.source_message,
-                                          link=self.link, title=self.title)
+                                          link=self.link, title=self.title,
+                                          request_id=self.request_id)
                 retry.prompt_message = prompt
                 try:
                     await prompt.edit(view=retry)

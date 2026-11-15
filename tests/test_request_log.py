@@ -60,6 +60,33 @@ class RequestLogTests(unittest.TestCase):
             self.assertIn("Bakım: Kapalı", panel)
             self.assertIn("Başarı oranı: %50.0", panel)
 
+    def test_pending_record_can_be_updated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = RequestLog(Path(temp) / "requests.sqlite3")
+            record_id = log.record(
+                guild_id=1, guild_name="Sunucu", channel_id=2, user_id=7,
+                user_name="user7", platform="youtube", url="https://youtu.be/x",
+                outcome="pending",
+            )
+            self.assertIsNotNone(record_id)
+            self.assertEqual(log.user_summary(7, 24)["pending"], 1)
+
+            updated = log.update(record_id, outcome="success", detail="youtube:720",
+                                 elapsed_ms=4200, file_count=1, bytes=9000)
+            self.assertTrue(updated)
+            summary = log.user_summary(7, 24)
+            self.assertEqual(summary["pending"], 0)
+            self.assertEqual(summary["success"], 1)
+            self.assertEqual(summary["files"], 1)
+            self.assertEqual(summary["bytes"], 9000)
+            self.assertEqual(summary["avg_ms"], 4200)
+
+    def test_update_missing_row_reports_false(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = RequestLog(Path(temp) / "requests.sqlite3")
+            self.assertFalse(log.update(None, outcome="success"))
+            self.assertFalse(log.update(9999, outcome="success"))
+
     def test_existing_database_is_migrated(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "requests.sqlite3"
