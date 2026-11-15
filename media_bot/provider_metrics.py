@@ -82,6 +82,22 @@ class ProviderMetrics:
         except (OSError, sqlite3.Error) as exc:
             LOG.warning("Provider winner could not be stored: %s", exc)
 
+    def last_winner(self, platform: str, hours: float = 24) -> str | None:
+        """Most recent winning provider for a platform, for fast-path ordering."""
+        if self.path is None:
+            return None
+        try:
+            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+                row = db.execute(
+                    "SELECT provider FROM provider_winners WHERE platform = ? AND at >= ? "
+                    "ORDER BY at DESC LIMIT 1",
+                    (platform, time.time() - hours * 3600),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            LOG.warning("Provider winner could not be read: %s", exc)
+            return None
+        return str(row[0]) if row else None
+
     def report(self, hours: int = 24) -> list[tuple[str, str, dict[str, int]]]:
         if self.path is None:
             return []

@@ -24,6 +24,9 @@ from .provider_metrics import METRICS
 
 LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
+# Last provider that actually delivered, per choice, so repeat requests can go
+# straight to it instead of racing every provider again.
+_PREFERRED: dict[str, str] = {}
 
 
 async def fetch_youtube_meta(url: str) -> tuple[str | None, str | None]:
@@ -282,8 +285,14 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
                 await asyncio.to_thread(METRICS.record, "youtube", name, outcome, int((time.monotonic() - started) * 1000))
         return None
 
-    result = await first_success(providers, attempt)
+    key = f"youtube:{choice}"
+    preferred = _PREFERRED.get(key) or await asyncio.to_thread(METRICS.last_winner, "youtube")
+    # Preferred provider runs alone; the rest only start if it fails or is slow.
+    grace = 5.0 if choice == "mp3" else 8.0
+    result = await first_success(providers, attempt, priority=preferred, grace=grace)
     if result is not None:
+        _PREFERRED[key] = result[1]
         await asyncio.to_thread(METRICS.record_winner, "youtube", result[1])
         return result
+    _PREFERRED.pop(key, None)
     raise DownloadError("Seçilen format alınamadı. " + "; ".join(failures)[:400])

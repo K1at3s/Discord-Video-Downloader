@@ -31,6 +31,16 @@ class HighlightConfigTests(unittest.TestCase):
 
 
 class MetricsFormatTests(unittest.TestCase):
+    def test_last_winner_tracks_most_recent_provider(self):
+        with tempfile.TemporaryDirectory() as temp:
+            m = ProviderMetrics(Path(temp) / "m.sqlite3")
+            self.assertIsNone(m.last_winner("youtube"))
+            m.record_winner("youtube", "cobalt")
+            m.record_winner("youtube", "yt-dlp")
+            m.record_winner("instagram", "indown")
+            self.assertEqual(m.last_winner("youtube"), "yt-dlp")
+            self.assertEqual(m.last_winner("instagram"), "indown")
+
     def test_format_text_includes_quota_summary(self):
         with tempfile.TemporaryDirectory() as temp:
             m = ProviderMetrics(Path(temp) / "m.sqlite3")
