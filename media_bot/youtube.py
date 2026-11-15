@@ -26,17 +26,57 @@ LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
 
 
-async def fetch_youtube_title(url: str) -> str | None:
-    """The public oEmbed endpoint supplies a title without a Google API key."""
+async def fetch_youtube_meta(url: str) -> tuple[str | None, str | None]:
+    """Return ``(title, channel)`` from the public oEmbed endpoint (no API key)."""
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=4), trust_env=False) as client:
             response = await client.get("https://www.youtube.com/oembed", params={"url": url, "format": "json"})
             response.raise_for_status()
-            title = response.json().get("title")
-            return title[:180] if isinstance(title, str) and title else None
+            data = response.json()
+            title = data.get("title")
+            author = data.get("author_name")
+            return (
+                title[:180] if isinstance(title, str) and title else None,
+                author[:90] if isinstance(author, str) and author else None,
+            )
     except (httpx.HTTPError, ValueError, TypeError):
-        return None
+        return None, None
 
+
+async def fetch_youtube_title(url: str) -> str | None:
+    """The public oEmbed endpoint supplies a title without a Google API key."""
+    title, _ = await fetch_youtube_meta(url)
+    return title
+
+
+_UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
+_NOISE = re.compile(
+    r"\s*[\(\[][^)\]]*\b(?:official|officiel|video|audio|lyrics?|lyric|music|m/?v|mv|hd|hq|4k|8k|"
+    r"remaster(?:ed)?|visuali[sz]er|clip|premiere)\b[^)\]]*[\)\]]",
+    re.I,
+)
+
+
+def clean_song_name(text: str) -> str:
+    text = _NOISE.sub(" ", text or "")
+    text = _UNSAFE_FILENAME.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip(" .-_")
+
+
+def song_filename(author: str | None, title: str | None, *, fallback: str = "youtube",
+                  limit: int = 90) -> str:
+    """Build ``Artist - Title.mp3`` while avoiding duplicated artist names."""
+    clean_title = clean_song_name(title or "")
+    clean_author = clean_song_name(author or "")
+    if not clean_title:
+        base = clean_song_name(fallback) or "youtube"
+    elif clean_author and clean_author.casefold() not in clean_title.casefold():
+        base = f"{clean_author} - {clean_title}"
+    else:
+        base = clean_title
+    if len(base) > limit:
+        base = base[:limit].rstrip(" .-_")
+    return f"{base or 'youtube'}.mp3"
 
 def gendownload_options(data: dict, choice: str, max_bytes: int) -> list[tuple[str, str]]:
     options: list[tuple[int, str, str]] = []

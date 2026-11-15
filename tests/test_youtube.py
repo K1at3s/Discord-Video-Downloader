@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from media_bot.links import PostLink
-from media_bot.youtube import _yt_dlp, gendownload_options
+from media_bot.youtube import _yt_dlp, gendownload_options, song_filename
 from media_bot.youtube_view import YoutubeChoiceView
 
 
@@ -21,6 +21,20 @@ class YoutubeTests(unittest.TestCase):
         self.assertEqual(gendownload_options(data, "720", 25)[:1], [(root + "1", "mp4")])
         self.assertEqual(gendownload_options(data, "1080", 25)[:1], [(root + "1", "mp4")])
         self.assertEqual(gendownload_options(data, "mp3", 25), [(root + "3", "m4a")])
+
+    def test_song_filename_uses_artist_and_title(self):
+        self.assertEqual(song_filename("MOTIVE", "MOTIVE - LACİVERT"), "MOTIVE - LACİVERT.mp3")
+        self.assertEqual(song_filename("Artist", "Song"), "Artist - Song.mp3")
+        self.assertEqual(song_filename("Artist", "Song (Official Video)"), "Artist - Song.mp3")
+        self.assertEqual(song_filename("Artist", "Song [Lyrics]"), "Artist - Song.mp3")
+        self.assertEqual(song_filename(None, "Only Title"), "Only Title.mp3")
+        self.assertEqual(song_filename(None, None, fallback="youtube"), "youtube.mp3")
+        self.assertEqual(song_filename("a/b", 'c:d*e?f"g<h>i|j'), "a b - c d e f g h i j.mp3")
+
+    def test_song_filename_is_limited(self):
+        name = song_filename("Artist", "x" * 200)
+        self.assertLessEqual(len(name), 94)  # 90 chars + ".mp3"
+        self.assertTrue(name.endswith(".mp3"))
 
     def test_components_v2_prompt_has_four_buttons(self):
         class Author:
