@@ -362,6 +362,52 @@ class HighlightCache:
             LOG.warning("Highlight cache write failed for %s: %s", hid, exc)
             return None
 
+    def stats(self) -> dict:
+        out = {
+            "entries": 0,
+            "files": 0,
+            "bytes": 0,
+            "stale": 0,
+            "max_bytes": self.max_bytes,
+            "ttl": self.ttl,
+            "path": str(self.root),
+        }
+        if not self.root.exists():
+            return out
+        now = time.time()
+        for child in self.root.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                meta = json.loads((child / "meta.json").read_text(encoding="utf-8"))
+                created = float(meta.get("created_at", 0))
+                names = [str(f) for f in meta.get("files", []) if isinstance(f, str)]
+            except (OSError, ValueError, TypeError):
+                out["stale"] += 1
+                continue
+            resolved = [name for name in names if (child / name).is_file()]
+            if not resolved or now - created > self.ttl:
+                out["stale"] += 1
+                continue
+            out["entries"] += 1
+            out["files"] += len(resolved)
+            out["bytes"] += self._entry_size(child, resolved)
+        return out
+
+    def clear(self) -> int:
+        if not self.root.exists():
+            return 0
+        removed = sum(1 for child in self.root.iterdir() if child.is_dir() and (child / "meta.json").is_file())
+        for child in list(self.root.iterdir()):
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+            except OSError as exc:
+                LOG.warning("Highlight cache clear failed for %s: %s", child, exc)
+        return removed
+
     def copy_to(self, entry: CacheEntry, target_folder: Path) -> list[Path]:
         target_folder.mkdir(parents=True, exist_ok=True)
         copied: list[Path] = []

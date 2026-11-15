@@ -163,6 +163,20 @@ class HighlightCacheTests(unittest.IsolatedAsyncioTestCase):
             remaining = [p.name for p in (Path(temp) / "cache").iterdir() if p.is_dir()]
             self.assertLessEqual(len(remaining), 2)
 
+    def test_stats_and_clear(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache = HighlightCache(Path(temp) / "cache", ttl=3600, max_bytes=1024 * 1024)
+            src = Path(temp) / "src"
+            src.mkdir()
+            (src / "a.mp4").write_bytes(b"video")
+            cache.put("123", src)
+            stats = cache.stats()
+            self.assertEqual(stats["entries"], 1)
+            self.assertEqual(stats["files"], 1)
+            self.assertEqual(stats["bytes"], 5)
+            self.assertEqual(cache.clear(), 1)
+            self.assertEqual(cache.stats()["entries"], 0)
+
     async def test_singleflight(self):
         with tempfile.TemporaryDirectory() as temp:
             cache = HighlightCache(Path(temp) / "cache")

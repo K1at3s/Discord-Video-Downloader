@@ -31,7 +31,7 @@ from .maintenance import MAINTENANCE, env_enabled
 from .metadata_fallback import Preview, fetch_preview, preview_embeds
 from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
-from .request_log import REQUESTS, parse_range, resolve_platform
+from .request_log import REQUESTS, _human_bytes, parse_range, resolve_platform
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
 from .spotify import fetch_track, find_audio_source
@@ -379,6 +379,50 @@ class MediaBot(discord.Client):
         removed = REQUESTS.clear(user_id=getattr(target, "id", None))
         await self._reply(message, f"🧹 {target_name} için {removed} kayıt silindi.")
 
+    async def _reply_errors(self, message: discord.Message, argument: str = "") -> None:
+        hours = 24
+        for token in argument.split():
+            parsed = parse_range(token)
+            if parsed is not None:
+                hours = parsed
+        await self._reply(message, REQUESTS.format_errors(hours)[:1900])
+
+    async def _reply_cache(self, message: discord.Message) -> None:
+        def ttl_text(seconds: float) -> str:
+            if seconds >= 3600:
+                return f"{seconds / 3600:g} saat"
+            return f"{seconds / 60:g} dk"
+
+        media = MEDIA_CACHE.stats()
+        lines = [
+            "📦 Önbellek durumu",
+            f"Genel medya: {'açık' if media['enabled'] else 'kapalı'} · "
+            f"{media['entries']} kayıt · {media['files']} dosya · {_human_bytes(media['bytes'])} "
+            f"(sınır {_human_bytes(media['max_bytes'])}, TTL {ttl_text(media['ttl'])})",
+        ]
+        if media["stale"]:
+            lines.append(f"♻️ Temizlenmeyi bekleyen eski kayıt: {media['stale']}")
+        highlight = HIGHLIGHTS.cache.stats() if HIGHLIGHTS.cache else None
+        if highlight is not None:
+            lines.append(
+                f"Highlight: {highlight['entries']} kayıt · {highlight['files']} dosya · "
+                f"{_human_bytes(highlight['bytes'])} (sınır {_human_bytes(highlight['max_bytes'])}, "
+                f"TTL {ttl_text(highlight['ttl'])})"
+            )
+            if highlight["stale"]:
+                lines.append(f"♻️ Eski highlight kaydı: {highlight['stale']}")
+        lines.append("")
+        lines.append("Temizlemek için (sahip): `!cachetemizle`")
+        await self._reply(message, "\n".join(lines)[:1900])
+
+    async def _reply_cache_clear(self, message: discord.Message) -> None:
+        media = MEDIA_CACHE.clear() if MEDIA_CACHE.enabled else 0
+        highlight = HIGHLIGHTS.cache.clear() if HIGHLIGHTS.cache else 0
+        await self._reply(
+            message,
+            f"🧹 Önbellek temizlendi · genel medya: {media} kayıt · highlight: {highlight} kayıt",
+        )
+
     async def _reply_user_info(self, message: discord.Message, argument: str = "") -> None:
         hours = 24
         id_token = ""
@@ -431,6 +475,22 @@ class MediaBot(discord.Client):
         if content.split(maxsplit=1)[0] in {"!logsil", "!logdelete"}:
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_log_delete_user(message, argument)
+            return
+        if content.split(maxsplit=1)[0] in {"!hatalar", "!hataları", "!errors"}:
+            if message.author.id != STATS_OWNER_ID:
+                await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
+                return
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_errors(message, argument)
+            return
+        if content.split(maxsplit=1)[0] in {"!cache", "!önbellek", "!onbellek"}:
+            await self._reply_cache(message)
+            return
+        if content.split(maxsplit=1)[0] in {"!cachetemizle", "!önbellektemizle", "!onbellektemizle"}:
+            if message.author.id != STATS_OWNER_ID:
+                await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
+                return
+            await self._reply_cache_clear(message)
             return
         if content.split(maxsplit=1)[0] in {"!info", "!profil", "!me", "!kimlik"}:
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""

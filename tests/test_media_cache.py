@@ -31,6 +31,29 @@ class MediaCacheTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stats_and_clear(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cache = MediaCache(root / "cache", ttl=60, max_bytes=1024 * 1024)
+            src_dir = root / "src"
+            src_dir.mkdir()
+            (src_dir / "a.mp4").write_bytes(b"12345")
+            (src_dir / "b.jpg").write_bytes(b"12")
+            cache.put("instagram", "https://example.com/p/1", False, "indown", [src_dir / "a.mp4"])
+            cache.put("tiktok", "https://example.com/p/2", False, "direct", [src_dir / "b.jpg"])
+
+            stats = cache.stats()
+            self.assertTrue(stats["enabled"])
+            self.assertEqual(stats["entries"], 2)
+            self.assertEqual(stats["files"], 2)
+            self.assertEqual(stats["bytes"], 7)
+            self.assertEqual(stats["stale"], 0)
+
+            self.assertEqual(cache.clear(), 2)
+            empty = cache.stats()
+            self.assertEqual(empty["entries"], 0)
+            self.assertEqual(empty["bytes"], 0)
+
     def test_singleflight(self):
         async def run():
             cache = MediaCache(None)

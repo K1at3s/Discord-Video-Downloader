@@ -138,6 +138,18 @@ class RequestLogTests(unittest.TestCase):
             self.assertFalse(log.update(None, outcome="success"))
             self.assertFalse(log.update(9999, outcome="success"))
 
+    def test_format_errors_lists_failures_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = RequestLog(Path(temp) / "requests.sqlite3")
+            record(log, outcome="success")
+            record(log, platform="tiktok", outcome="failure", detail="timeout")
+            text = log.format_errors(24)
+            self.assertIn("Son hatalar", text)
+            self.assertIn("tiktok", text)
+            self.assertIn("timeout", text)
+            self.assertNotIn("instagram", text)
+            self.assertIn("hata kaydı yok", log.format_errors(24, limit=0).lower())
+
     def test_privacy_and_management(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "requests.sqlite3"

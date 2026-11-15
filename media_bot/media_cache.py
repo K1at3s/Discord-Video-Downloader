@@ -141,6 +141,57 @@ class MediaCache:
             LOG.warning("Media cache write failed: %s", exc)
             return None
 
+    def stats(self) -> dict:
+        out = {
+            "enabled": self.enabled,
+            "entries": 0,
+            "files": 0,
+            "bytes": 0,
+            "stale": 0,
+            "max_bytes": self.max_bytes,
+            "ttl": self.ttl,
+            "path": str(self.root) if self.root is not None else None,
+        }
+        if not self.root or not self.root.exists():
+            return out
+        now = time.time()
+        for meta_path in self.root.rglob("meta.json"):
+            base = meta_path.parent
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                created = float(meta.get("created_at", 0))
+                names = [str(f) for f in meta.get("files", []) if isinstance(f, str)]
+            except (OSError, ValueError, TypeError):
+                out["stale"] += 1
+                continue
+            resolved = [name for name in names if (base / name).is_file()]
+            if not resolved or now - created > self.ttl:
+                out["stale"] += 1
+                continue
+            out["entries"] += 1
+            out["files"] += len(resolved)
+            for name in resolved:
+                try:
+                    out["bytes"] += (base / name).stat().st_size
+                except OSError:
+                    pass
+        return out
+
+    def clear(self) -> int:
+        """Delete every cached entry and return how many were removed."""
+        if not self.root or not self.root.exists():
+            return 0
+        removed = sum(1 for _ in self.root.rglob("meta.json"))
+        for child in list(self.root.iterdir()):
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+            except OSError as exc:
+                LOG.warning("Media cache clear failed for %s: %s", child, exc)
+        return removed
+
     def copy_to(self, entry: CacheEntry, target_folder: Path) -> list[Path]:
         target_folder.mkdir(parents=True, exist_ok=True)
         copied: list[Path] = []

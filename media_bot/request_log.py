@@ -518,6 +518,23 @@ class RequestLog:
                 lines.append(f"• {user['name']} · {user['total']} iş")
         return "\n".join(lines)
 
+    def format_errors(self, hours: int = 24, limit: int = 10) -> str:
+        rows = self.recent(hours, limit, outcome="failure")
+        header = f"🐞 Son hatalar · {range_label(hours)}"
+        if not rows:
+            return f"{header}\nSeçilen aralıkta hata kaydı yok."
+        lines = [header]
+        for row in rows:
+            lines.append(
+                f"• {_human_date(row['at'])} · **{PLATFORM_LABELS.get(row['platform'], row['platform'])}** "
+                f"· {row['user']} · {row['guild']}"
+            )
+            if row["detail"]:
+                lines.append(f"   ↳ {row['detail'][:140]}")
+            if row["url"]:
+                lines.append(f"   {row['url'][:100]}")
+        return "\n".join(lines)
+
     def _format_platforms(self, rows: dict[str, dict], limit: int = 12) -> list[str]:
         lines: list[str] = []
         for platform, p in list(rows.items())[:limit]:
@@ -584,22 +601,37 @@ class RequestLog:
     def format_text(self, hours: int = 24) -> str:
         return self.format_panel(hours)
 
-    def recent(self, hours: int = 24, limit: int = 10) -> list[dict]:
+    def recent(self, hours: int = 24, limit: int = 10, *, outcome: str | None = None,
+               platform: str | None = None, user_id: int | None = None) -> list[dict]:
         if self.path is None:
             return []
         cutoff = time.time() - hours * 3600
+        clauses = ["at >= ?"]
+        params: list[object] = [cutoff]
+        if outcome is not None:
+            clauses.append("outcome = ?")
+            params.append(outcome)
+        if platform is not None:
+            clauses.append("platform = ?")
+            params.append(platform)
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        params.append(limit)
         with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
             rows = db.execute(
-                "SELECT at, guild_name, user_name, platform, outcome, url, file_count, bytes "
-                "FROM request_log WHERE at >= ? ORDER BY at DESC LIMIT ?", (cutoff, limit),
+                "SELECT at, guild_name, user_name, platform, outcome, url, detail, "
+                "file_count, bytes "
+                f"FROM request_log WHERE {' AND '.join(clauses)} ORDER BY at DESC LIMIT ?",
+                tuple(params),
             ).fetchall()
         return [
             {
                 "at": float(at), "guild": str(guild or "?"), "user": str(user or "?"),
                 "platform": str(platform), "outcome": str(outcome), "url": str(url),
-                "files": int(files or 0), "bytes": int(size or 0),
+                "detail": str(detail or ""), "files": int(files or 0), "bytes": int(size or 0),
             }
-            for at, guild, user, platform, outcome, url, files, size in rows
+            for at, guild, user, platform, outcome, url, detail, files, size in rows
         ]
 
 
