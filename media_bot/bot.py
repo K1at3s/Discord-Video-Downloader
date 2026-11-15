@@ -336,6 +336,49 @@ class MediaBot(discord.Client):
             return
         await self._reply(message, "Kullanım: `!bakim` · `!bakim ac` · `!bakim kapat`")
 
+    async def _reply_log_clear(self, message: discord.Message, argument: str) -> None:
+        confirmed = "onay" in {token.lower() for token in argument.split()}
+        if not confirmed:
+            total = REQUESTS.count()
+            await self._reply(
+                message,
+                f"⚠️ Tüm işlem kayıtları silinecek ({total} satır).\n"
+                "Onaylamak için `!logtemizle onay` yazın.",
+            )
+            return
+        removed = REQUESTS.clear()
+        await self._reply(message, f"🧹 {removed} işlem kaydı silindi.")
+
+    async def _reply_log_delete_user(self, message: discord.Message, argument: str) -> None:
+        owner = message.author.id == STATS_OWNER_ID
+        tokens = argument.split()
+        confirmed = any(token.lower() in {"onay", "confirm"} for token in tokens)
+        target = message.author
+        target_name = getattr(target, "display_name", None) or getattr(target, "name", None) or str(target)
+        if message.mentions:
+            target = message.mentions[0]
+            target_name = getattr(target, "display_name", None) or getattr(target, "name", None) or str(target)
+        else:
+            for token in tokens:
+                if token.isdigit():
+                    target = SimpleNamespace(id=int(token), display_name=token, name=token)
+                    target_name = token
+                    break
+        is_other = getattr(target, "id", None) != message.author.id
+        if is_other and not owner:
+            await self._reply(message, "Başka bir kullanıcının kayıtlarını yalnızca bot sahibi silebilir.")
+            return
+        if not confirmed:
+            count = REQUESTS.count(user_id=getattr(target, "id", 0))
+            hint = "!logsil @kullanıcı onay" if is_other else "!logsil onay"
+            await self._reply(
+                message,
+                f"⚠️ {target_name} için {count} kayıt silinecek.\nOnaylamak için `{hint}` yazın.",
+            )
+            return
+        removed = REQUESTS.clear(user_id=getattr(target, "id", None))
+        await self._reply(message, f"🧹 {target_name} için {removed} kayıt silindi.")
+
     async def _reply_user_info(self, message: discord.Message, argument: str = "") -> None:
         hours = 24
         id_token = ""
@@ -377,6 +420,17 @@ class MediaBot(discord.Client):
                 return
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_request_stats(message, argument)
+            return
+        if content.split(maxsplit=1)[0] in {"!logtemizle", "!logclear"}:
+            if message.author.id != STATS_OWNER_ID:
+                await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
+                return
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_log_clear(message, argument)
+            return
+        if content.split(maxsplit=1)[0] in {"!logsil", "!logdelete"}:
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_log_delete_user(message, argument)
             return
         if content.split(maxsplit=1)[0] in {"!info", "!profil", "!me", "!kimlik"}:
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
@@ -854,7 +908,12 @@ def main() -> None:
             raise ValueError("GALLERY_DL_RS_PATH mevcut bir programı göstermeli")
         database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
         METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
-        REQUESTS.configure(database_path.with_name("request_log.sqlite3"))
+        REQUESTS.configure(
+            database_path.with_name("request_log.sqlite3"),
+            retention_days=_positive_int("REQUEST_LOG_RETENTION_DAYS", 30, 3650),
+            store_url=os.getenv("REQUEST_LOG_STORE_URL", "1").strip().lower()
+            not in {"0", "false", "no", "off", "hayir", "hayır"},
+        )
         MAINTENANCE.configure(
             database_path.parent / "maintenance.json",
             enabled=env_enabled("MAINTENANCE_MODE"),

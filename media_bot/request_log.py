@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import logging
 import re
 import sqlite3
@@ -123,6 +125,8 @@ def resolve_platform(value: str) -> str | None:
 class RequestLog:
     def __init__(self, path: Path | None = None, *, initialize: bool = True):
         self.path: Path | None = None
+        self.store_url = True
+        self.retention_seconds = RETENTION_SECONDS
         self._lock = threading.Lock()
         self._last_cleanup = 0.0
         if path is not None:
@@ -131,7 +135,11 @@ class RequestLog:
             else:
                 self.path = path
 
-    def configure(self, path: Path) -> None:
+    def configure(self, path: Path, *, retention_days: int | None = None,
+                  store_url: bool = True) -> None:
+        self.store_url = bool(store_url)
+        if retention_days is not None:
+            self.retention_seconds = max(1, int(retention_days)) * 86400
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, closing(sqlite3.connect(path, timeout=5)) as db, db:
             db.execute(
@@ -162,7 +170,7 @@ class RequestLog:
     def _cleanup(self, db: sqlite3.Connection, now: float) -> None:
         if now - self._last_cleanup < 86400:
             return
-        db.execute("DELETE FROM request_log WHERE at < ?", (now - RETENTION_SECONDS,))
+        db.execute("DELETE FROM request_log WHERE at < ?", (now - self.retention_seconds,))
         self._last_cleanup = now
 
     def record(
@@ -206,7 +214,7 @@ class RequestLog:
                         user_id,
                         (user_name or "")[:120],
                         platform,
-                        url[:1000],
+                        url[:1000] if self.store_url else "",
                         outcome,
                         (detail or "")[:300],
                         max(0, int(elapsed_ms)),
@@ -263,6 +271,92 @@ class RequestLog:
         except (OSError, sqlite3.Error) as exc:
             LOG.warning("Request log could not be updated: %s", exc)
             return False
+
+    def count(self, *, user_id: int | None = None, hours: int | None = None) -> int:
+        if self.path is None:
+            return 0
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if hours is not None:
+            clauses.append("at >= ?")
+            params.append(time.time() - hours * 3600)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+            row = db.execute(f"SELECT COUNT(*) FROM request_log {where}", tuple(params)).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    def clear(self, *, user_id: int | None = None, hours: int | None = None) -> int:
+        """Delete log rows (all, one user, or within the last ``hours``) and return the count."""
+        if self.path is None:
+            return 0
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if hours is not None:
+            clauses.append("at >= ?")
+            params.append(time.time() - hours * 3600)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        try:
+            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+                cursor = db.execute(f"DELETE FROM request_log {where}", tuple(params))
+                return int(cursor.rowcount or 0)
+        except (OSError, sqlite3.Error) as exc:
+            LOG.warning("Request log could not be cleared: %s", exc)
+            return 0
+
+    def export_rows(self, *, hours: int | None = None, user_id: int | None = None) -> list[dict]:
+        if self.path is None:
+            return []
+        clauses: list[str] = []
+        params: list[object] = []
+        if user_id is not None:
+            clauses.append("user_id = ?")
+            params.append(int(user_id))
+        if hours is not None:
+            clauses.append("at >= ?")
+            params.append(time.time() - hours * 3600)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+            rows = db.execute(
+                "SELECT at, guild_id, guild_name, channel_id, user_id, user_name, "
+                f"platform, url, outcome, detail, elapsed_ms, file_count, bytes "
+                f"FROM request_log {where} ORDER BY at",
+                tuple(params),
+            ).fetchall()
+        keys = ("at", "guild_id", "guild_name", "channel_id", "user_id", "user_name",
+                "platform", "url", "outcome", "detail", "elapsed_ms", "file_count", "bytes")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def export_csv(self, path: Path, *, hours: int | None = None, user_id: int | None = None) -> int:
+        rows = self.export_rows(hours=hours, user_id=user_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()) if rows else [
+                "at", "guild_id", "guild_name", "channel_id", "user_id", "user_name",
+                "platform", "url", "outcome", "detail", "elapsed_ms", "file_count", "bytes",
+            ])
+            writer.writeheader()
+            for row in rows:
+                row = dict(row)
+                row["at"] = datetime.fromtimestamp(float(row["at"]), ISTANBUL).isoformat()
+                writer.writerow(row)
+        return len(rows)
+
+    def export_json(self, path: Path, *, hours: int | None = None, user_id: int | None = None) -> int:
+        rows = self.export_rows(hours=hours, user_id=user_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = []
+        for row in rows:
+            item = dict(row)
+            item["at"] = datetime.fromtimestamp(float(item["at"]), ISTANBUL).isoformat()
+            payload.append(item)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return len(payload)
 
     def _totals(self, db: sqlite3.Connection, where: str, params: tuple) -> dict:
         row = db.execute(
@@ -519,6 +613,8 @@ def main() -> None:
     parser.add_argument("--range", default=None, help="24s / 7g / 30g gibi aralık")
     parser.add_argument("--user", type=int, default=None)
     parser.add_argument("--platform", default=None)
+    parser.add_argument("--export-csv", type=Path, default=None)
+    parser.add_argument("--export-json", type=Path, default=None)
     args = parser.parse_args()
     hours = parse_range(args.range) if args.range else None
     if hours is None:
@@ -527,6 +623,14 @@ def main() -> None:
         print("Henüz işlem kaydı yok. Bot çalıştıktan sonra tekrar deneyin.")
         return
     log = RequestLog(args.db, initialize=False)
+    if args.export_csv:
+        count = log.export_csv(args.export_csv, hours=hours, user_id=args.user)
+        print(f"{count} kayıt CSV olarak yazıldı: {args.export_csv}")
+        return
+    if args.export_json:
+        count = log.export_json(args.export_json, hours=hours, user_id=args.user)
+        print(f"{count} kayıt JSON olarak yazıldı: {args.export_json}")
+        return
     if args.platform:
         print(log.format_platform(args.platform, hours))
         return

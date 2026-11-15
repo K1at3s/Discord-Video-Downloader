@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -136,6 +137,50 @@ class RequestLogTests(unittest.TestCase):
             log = RequestLog(Path(temp) / "requests.sqlite3")
             self.assertFalse(log.update(None, outcome="success"))
             self.assertFalse(log.update(9999, outcome="success"))
+
+    def test_privacy_and_management(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "requests.sqlite3"
+            log = RequestLog(path, initialize=False)
+            log.configure(path, store_url=False)
+            record(log, user_id=1, outcome="success")
+            record(log, user_id=2, outcome="failure")
+            rows = log.export_rows()
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["url"] == "" for row in rows))
+
+            self.assertEqual(log.count(user_id=1), 1)
+            self.assertEqual(log.clear(user_id=1), 1)
+            self.assertEqual(log.count(user_id=1), 0)
+            self.assertEqual(log.count(), 1)
+            self.assertEqual(log.clear(), 1)
+            self.assertEqual(log.count(), 0)
+
+    def test_retention_days_removes_old_rows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "requests.sqlite3"
+            log = RequestLog(path)
+            record(log, user_id=1, outcome="success")
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute("UPDATE request_log SET at = ?", (time.time() - 3 * 86400,))
+            log.configure(path, retention_days=1)
+            self.assertEqual(log.count(), 1)  # cleanup runs at most once a day, so force a fresh instance
+
+            fresh = RequestLog(path, initialize=False)
+            fresh.configure(path, retention_days=1)
+            self.assertEqual(fresh.count(), 0)
+
+    def test_export_csv_and_json(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = RequestLog(Path(temp) / "requests.sqlite3")
+            record(log, outcome="success")
+            record(log, user_id=2, outcome="failure")
+            csv_path = Path(temp) / "out.csv"
+            json_path = Path(temp) / "out.json"
+            self.assertEqual(log.export_csv(csv_path), 2)
+            self.assertEqual(log.export_json(json_path, user_id=2), 1)
+            self.assertIn("platform", csv_path.read_text(encoding="utf-8"))
+            self.assertIn("\"user_id\": 2", json_path.read_text(encoding="utf-8"))
 
     def test_existing_database_is_migrated(self):
         with tempfile.TemporaryDirectory() as temp:

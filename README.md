@@ -83,6 +83,8 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `STATS_OWNER_ID` | `1065352859195015260` | `!stats` / `!panel` ve başka kullanıcının `!info` sorgusunu kullanabilecek tek Discord kullanıcı ID'si |
 | `MAINTENANCE_MODE` | *(boş)* | `1` ise bot açılışta bakım modunda başlar; boşsa son durum `data/maintenance.json` dosyasından okunur |
 | `MAINTENANCE_MESSAGE` | *(varsayılan metin)* | Bakım açıkken kullanıcılara gösterilecek özel mesaj |
+| `REQUEST_LOG_RETENTION_DAYS` | `30` | İşlem kayıtlarının saklanma süresi (gün) |
+| `REQUEST_LOG_STORE_URL` | `1` | `0` ise işlem kayıtlarında URL saklanmaz (platform/sonuç yine tutulur) |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
 
@@ -155,7 +157,7 @@ Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat 
 
 ### İşlem kayıtları (sunucu/kullanıcı/link)
 
-Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`), işlem süresi, dosya sayısı ve toplam boyut. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Son 30 güne kadar tutulur.
+Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`), işlem süresi, dosya sayısı ve toplam boyut. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Saklama süresi `REQUEST_LOG_RETENTION_DAYS` (varsayılan 30 gün); `REQUEST_LOG_STORE_URL=0` ile URL'ler hiç kaydedilmez.
 
 Discord komutları (izin verilen kanalda):
 - `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
@@ -164,6 +166,8 @@ Discord komutları (izin verilen kanalda):
 - `!info` / `!profil` / `!me` → kendi işlem özetiniz (`!info 7g` ile aralık). `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
 - `!metrics` / `!durum` → sağlayıcı ve highlight bucket özeti.
 - `!bakim` → bakım modu durumu; `!bakim ac` / `!bakim kapat` ile aç/kapat. **Yalnızca `STATS_OWNER_ID`**. Bakım açıkken sahip dışındaki kullanıcıların yeni indirmeleri engellenir (panelde “Bakım: Açık” görünür).
+- `!logtemizle` → tüm işlem kayıtlarını silme onayı; `!logtemizle onay` ile siler. **Yalnızca `STATS_OWNER_ID`**.
+- `!logsil` → kendi kayıtlarını silme onayı; `!logsil onay` ile siler. `!logsil @kullanıcı` / `!logsil <id>` başka kullanıcının kayıtlarını siler (**yalnızca sahip**).
 
 Kayıtlar tek bir SQLite dosyasında tutulur ama her satır `user_id` (ve `guild_id`) ile ilişkilidir; `!info` yalnızca ilgili kullanıcının satırlarını toplar.
 
@@ -175,6 +179,8 @@ Komut satırından:
 .\.venv\Scripts\python.exe -m media_bot.request_log --hours 168
 .\.venv\Scripts\python.exe -m media_bot.request_log --platform instagram --range 30g
 .\.venv\Scripts\python.exe -m media_bot.request_log --user 123456789012345678
+.\.venv\Scripts\python.exe -m media_bot.request_log --range 7g --export-csv data/loglar.csv
+.\.venv\Scripts\python.exe -m media_bot.request_log --range 30g --export-json data/loglar.json
 ```
 
 `DATABASE_PATH` farklıysa `--db <o klasör>\request_log.sqlite3` kullanın.
