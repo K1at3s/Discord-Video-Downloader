@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from .adult import AdultQuota, channel_is_nsfw, istanbul_day, reddit_adult_status
 from .bluesky import download_bluesky_media, fetch_bluesky_post
 from .captions import display_chunks, fetch_caption
+from .cooldowns import Cooldowns
 from .download import DownloadError, download_media
 from .highlight_state import HIGHLIGHTS, format_wait
 from .indownio import is_rate_limited_message, resolve_indownio
@@ -43,10 +44,42 @@ from .youtube import download_youtube
 
 LOG = logging.getLogger(__name__)
 STATS_OWNER_ID = int(os.getenv("STATS_OWNER_ID", "1065352859195015260"))
+# Discord's highest upload limit. Anything above this is a config mistake.
+UPLOAD_CEILING = 500 * 1024 * 1024
 COLORS = {"instagram": 0xC13584, "facebook": 0x1877F2, "reddit": 0xFF4500,
           "tiktok": 0x25F4EE, "youtube": 0xFF0033, "x": 0x20262E,
           "threads": 0x20262E, "douyin": 0x25F4EE, "weibo": 0xE6162D,
           "streamable": 0x0F8FFA, "bluesky": 0x1083FE}
+
+
+def upload_limit(message: object | None, configured: int) -> int:
+    """Use the guild's real upload limit, optionally capped by ``configured``."""
+    limit = 0
+    guild = getattr(message, "guild", None)
+    try:
+        limit = int(getattr(guild, "filesize_limit", 0) or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if configured > 0:
+        limit = min(limit, configured) if limit else configured
+    if limit <= 0:
+        limit = configured or UPLOAD_CEILING
+    return max(1, min(limit, UPLOAD_CEILING))
+
+
+def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{name} {minimum} ile {maximum} arasında olmalı")
+    return value
+
+
+def _positive_int(name: str, default: int, maximum: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if not 1 <= value <= maximum:
+        raise ValueError(f"{name} 1 ile {maximum} arasında olmalı")
+    return value
+
 def source_button(url: str) -> discord.ui.View:
     view = discord.ui.View(timeout=None)
     view.add_item(discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=url))
@@ -196,6 +229,41 @@ def _is_admin(message: discord.Message) -> bool:
     return bool(getattr(permissions, "administrator", False) or getattr(permissions, "manage_guild", False))
 
 
+HELP_TEXT = """**Discord Video Bot**
+Bağlantı gönder: Instagram, Threads, TikTok, X, Facebook, Reddit, YouTube, Spotify, Bluesky, Douyin, Weibo, Streamable.
+
+**Komutlar**
+`/stats [24s|7g|30g] [platform]` · işlem paneli (sahip)
+`/info [kullanıcı]` · kişisel özet
+`/cache` · önbellek durumu
+`/hatalar [aralık]` · son hatalar (sahip)
+`/bakim [ac|kapat]` · bakım modu (sahip)
+`/metrics` · sağlayıcı metrikleri
+
+Eski `!` komutları da çalışır."""
+
+
+class InteractionMessage:
+    """Message-like adapter so prefix handlers can serve slash commands too."""
+
+    def __init__(self, interaction: discord.Interaction, *, mentions: list | None = None):
+        self.interaction = interaction
+        self.author = interaction.user
+        self.guild = interaction.guild
+        self.channel = interaction.channel
+        self.id = interaction.id
+        self.mentions = mentions or []
+
+    async def reply(self, content: str = "", **kwargs):
+        # Interaction responses do not support message-only options.
+        kwargs.pop("mention_author", None)
+        kwargs.pop("suppress_embeds", None)
+        if self.interaction.response.is_done():
+            return await self.interaction.followup.send(content=content or None, **kwargs)
+        return await self.interaction.response.send_message(content=content or None, **kwargs)
+
+
+
 def _positive_int(name: str, default: int, maximum: int) -> int:
     value = int(os.getenv(name, str(default)))
     if not 1 <= value <= maximum:
@@ -204,7 +272,7 @@ def _positive_int(name: str, default: int, maximum: int) -> int:
 
 
 class MediaBot(discord.Client):
-    def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None):
+    def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
@@ -221,6 +289,112 @@ class MediaBot(discord.Client):
         self.adult_quota = AdultQuota(database_path or Path(__file__).resolve().parent.parent / "data" / "bot.sqlite3")
         self._health_task: asyncio.Task | None = None
         self._health_skips = 0
+        try:
+            cooldown = float(os.getenv("COMMAND_COOLDOWN_SECONDS", "2") or 2)
+        except ValueError:
+            cooldown = 2.0
+        self.command_cooldowns = Cooldowns(max(0.0, min(cooldown, 60.0)))
+        self.command_guild_id = command_guild_id
+        self._register_commands()
+
+    async def setup_hook(self) -> None:
+        try:
+            if self.command_guild_id:
+                guild = discord.Object(id=self.command_guild_id)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                LOG.info("Slash komutları %s sunucusuna eşitlendi", self.command_guild_id)
+            else:
+                await self.tree.sync()
+                LOG.info("Slash komutları global olarak eşitlendi")
+        except discord.HTTPException as exc:
+            LOG.warning("Slash komutları eşitlenemedi: %s", exc)
+
+    def _command_allowed(self, interaction: discord.Interaction) -> bool:
+        if interaction.user and interaction.user.id == self.owner_id:
+            return True
+        return bool(interaction.user and self.command_cooldowns.allow(interaction.user.id))
+
+    async def _owner_command(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Bu komut yalnızca bot sahibine açık.", ephemeral=True)
+            return False
+        return True
+
+    def _register_commands(self) -> None:
+        tree = discord.app_commands.CommandTree(self)
+
+        async def run_existing(interaction: discord.Interaction, method, argument: str = "") -> None:
+            if not self._command_allowed(interaction):
+                await interaction.response.send_message("Çok hızlı; birkaç saniye sonra tekrar dene.", ephemeral=True)
+                return
+            await interaction.response.defer()
+            try:
+                if argument:
+                    await method(InteractionMessage(interaction), argument)
+                else:
+                    await method(InteractionMessage(interaction))
+            except Exception:
+                LOG.exception("Slash komutu başarısız: %s", interaction.command)
+                try:
+                    await interaction.followup.send("Komut çalıştırılırken hata oluştu.")
+                except discord.HTTPException:
+                    pass
+
+        @tree.command(name="yardim", description="Bot komutlarını ve desteklenen platformları göster")
+        async def yardim(interaction: discord.Interaction) -> None:
+            await interaction.response.send_message(HELP_TEXT, ephemeral=True)
+
+        @tree.command(name="metrics", description="Sağlayıcı ve highlight metriklerini göster")
+        async def metrics(interaction: discord.Interaction) -> None:
+            await run_existing(interaction, self._reply_metrics)
+
+        @tree.command(name="stats", description="İşlem istatistikleri (yalnızca sahip)")
+        @discord.app_commands.describe(aralik="24s, 7g veya 30g", platform="instagram, youtube, tiktok…")
+        async def stats(interaction: discord.Interaction, aralik: str = "", platform: str = "") -> None:
+            if not await self._owner_command(interaction):
+                return
+            await run_existing(interaction, self._reply_request_stats, f"{aralik} {platform}".strip())
+
+        @tree.command(name="info", description="Kendi işlem özetin")
+        @discord.app_commands.describe(kullanici="Başka bir kullanıcı (yalnızca sahip)", aralik="24s, 7g veya 30g")
+        async def info(interaction: discord.Interaction, kullanici: discord.Member | None = None, aralik: str = "") -> None:
+            if kullanici and interaction.user.id != self.owner_id:
+                await interaction.response.send_message(
+                    "Başka bir kullanıcının istatistiğini yalnızca bot sahibi görebilir.", ephemeral=True)
+                return
+            if not self._command_allowed(interaction):
+                await interaction.response.send_message("Çok hızlı; birkaç saniye sonra tekrar dene.", ephemeral=True)
+                return
+            await interaction.response.defer()
+            adapter = InteractionMessage(interaction, mentions=[kullanici] if kullanici else [])
+            await self._reply_user_info(adapter, aralik)
+
+        @tree.command(name="cache", description="Medya ve highlight önbelleği durumu")
+        async def cache(interaction: discord.Interaction) -> None:
+            await run_existing(interaction, self._reply_cache)
+
+        @tree.command(name="cachetemizle", description="Önbellekleri temizle (yalnızca sahip)")
+        async def cache_clear(interaction: discord.Interaction) -> None:
+            if not await self._owner_command(interaction):
+                return
+            await run_existing(interaction, self._reply_cache_clear)
+
+        @tree.command(name="hatalar", description="Son hatalar (yalnızca sahip)")
+        @discord.app_commands.describe(aralik="24s, 7g veya 30g")
+        async def errors(interaction: discord.Interaction, aralik: str = "") -> None:
+            if not await self._owner_command(interaction):
+                return
+            await run_existing(interaction, self._reply_errors, aralik)
+
+        @tree.command(name="bakim", description="Bakım modu (yalnızca sahip)")
+        @discord.app_commands.describe(durum="ac veya kapat; boş bırakılırsa durumu gösterir")
+        async def maintenance(interaction: discord.Interaction, durum: str = "") -> None:
+            if not await self._owner_command(interaction):
+                return
+            await run_existing(interaction, self._reply_maintenance, durum)
+
+        self.tree = tree
 
     async def on_ready(self) -> None:
         LOG.info("Hazır: %s (%s)", self.user, self.user.id if self.user else "?")
@@ -318,7 +492,7 @@ class MediaBot(discord.Client):
             text = REQUESTS.format_panel(hours, role=role, maintenance=MAINTENANCE.active)
         await self._reply(message, text[:1900])
 
-    async def _reply_maintenance(self, message: discord.Message, argument: str) -> None:
+    async def _reply_maintenance(self, message: discord.Message, argument: str = "") -> None:
         action = argument.strip().lower()
         if not action:
             state = "Açık" if MAINTENANCE.active else "Kapalı"
@@ -455,6 +629,14 @@ class MediaBot(discord.Client):
             return
         raw_content = (message.content or "").strip()
         content = raw_content.lower()
+        cooldowns = getattr(self, "command_cooldowns", None)
+        if (cooldowns is not None and raw_content.startswith("!")
+                and message.author.id != STATS_OWNER_ID
+                and not cooldowns.allow(message.author.id)):
+            return
+        if content.split(maxsplit=1)[0] in {"!yardim", "!yardım", "!help", "!komutlar"}:
+            await self._reply(message, HELP_TEXT)
+            return
         if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
             await self._reply_metrics(message)
             return
@@ -648,7 +830,8 @@ class MediaBot(discord.Client):
             await set_status("⏳ Gönderi hazırlanıyor...")
             return await self._handle_reddit(message, link, status_message=status_message)
         if link.platform == "youtube":
-            view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu")
+            view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu",
+                                     upload_limit=upload_limit(message, self.upload_bytes))
             view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
             return "pending", [], view
         if link.platform == "x":
@@ -670,7 +853,7 @@ class MediaBot(discord.Client):
             user_id = getattr(getattr(message, "author", None), "id", None)
             await set_status("⏳ Medya indiriliyor...")
             try:
-                media, _ = await download_media(link, folder, self.upload_bytes, self.cookie_file, self.cobalt_url, self.cobalt_key, self.gallery_rs_path, user_id=user_id)
+                media, _ = await download_media(link, folder, upload_limit(message, self.upload_bytes), self.cookie_file, self.cobalt_url, self.cobalt_key, self.gallery_rs_path, user_id=user_id)
             except DownloadError as exc:
                 error = exc
             except BaseException:
@@ -757,7 +940,7 @@ class MediaBot(discord.Client):
         with tempfile.TemporaryDirectory(prefix="discord-bluesky-") as tmp:
             await set_status("⏳ Medya indiriliyor...")
             try:
-                media = await download_bluesky_media(post, Path(tmp), self.upload_bytes)
+                media = await download_bluesky_media(post, Path(tmp), upload_limit(message, self.upload_bytes))
             except OSError as exc:
                 LOG.warning("Bluesky media unavailable: %s", exc)
                 media = []
@@ -849,7 +1032,7 @@ class MediaBot(discord.Client):
                 media_link = parse_link(source_url) or link
                 user_id = getattr(getattr(message, "author", None), "id", None)
                 media, _ = await download_media(
-                    media_link, Path(tmp), self.upload_bytes, self.cookie_file,
+                    media_link, Path(tmp), upload_limit(message, self.upload_bytes), self.cookie_file,
                     self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
                     user_id=user_id,
                 )
@@ -874,7 +1057,7 @@ class MediaBot(discord.Client):
                     except discord.HTTPException:
                         pass
                 file, provider = await download_youtube(
-                    source, Path(tmp), "mp3", self.upload_bytes,
+                    source, Path(tmp), "mp3", upload_limit(message, self.upload_bytes),
                     self.cookie_file, self.cobalt_url, self.cobalt_key,
                 )
                 safe_title = re.sub(r"[^\w .-]", "", track.title, flags=re.UNICODE).strip()[:90] or "parca"
@@ -890,6 +1073,7 @@ class MediaBot(discord.Client):
     async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         with tempfile.TemporaryDirectory(prefix="discord-x-") as tmp:
             folder = Path(tmp)
+            limit = upload_limit(message, self.upload_bytes)
             post = await fetch_post(link.post_id or "")
             media_task = None
             if post is None or _has_media(post):
@@ -900,7 +1084,7 @@ class MediaBot(discord.Client):
                     except discord.HTTPException:
                         pass
                 media_task = asyncio.create_task(download_media(
-                    link, folder / "media", self.upload_bytes, self.cookie_file,
+                    link, folder / "media", limit, self.cookie_file,
                     self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
                     user_id=user_id,
                 ))
@@ -915,7 +1099,7 @@ class MediaBot(discord.Client):
                     except Exception:
                         LOG.exception("Could not render X card")
                     else:
-                        if card.is_file() and 0 < card.stat().st_size <= self.upload_bytes:
+                        if card.is_file() and 0 < card.stat().st_size <= limit:
                             await self._reply(message, "**X gönderisi**", [card], view=source_button(link.url))
                             card_sent = True
 
@@ -1007,9 +1191,10 @@ def main() -> None:
         )
         bot = MediaBot(
             channel_ids=channels,
-            upload_bytes=_positive_int("MAX_UPLOAD_MB", 20, 500) * 1024 * 1024,
+            upload_bytes=_bounded_int("MAX_UPLOAD_MB", 0, 0, 500) * 1024 * 1024,
             max_links=_positive_int("MAX_LINKS_PER_MESSAGE", 3, 10),
             concurrency=_positive_int("MAX_CONCURRENT_JOBS", 2, 10),
+            command_guild_id=_bounded_int("COMMAND_GUILD_ID", 0, 0, 2**63 - 1) or None,
             cookie_file=cookie_file,
             cobalt_url=cobalt_url,
             cobalt_key=os.getenv("COBALT_API_KEY", "").strip() or None,

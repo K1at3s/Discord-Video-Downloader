@@ -62,7 +62,9 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | --- | --- | --- |
 | `DISCORD_TOKEN` | Yok | Zorunlu bot token'ı |
 | `CHANNEL_IDS` | Boş | Virgülle ayrılmış kanal ID'leri; boşsa erişilebilen tüm sunucu metin kanalları |
-| `MAX_UPLOAD_MB` | `20` | Dosya başına yerel sınır; Discord sınırınıza uygun seçin |
+| `MAX_UPLOAD_MB` | `0` | `0` ise sunucunun gerçek yükleme limiti (`guild.filesize_limit`) kullanılır; `0`'dan büyük değer tüm sunucularda üst sınır (MB) olur |
+| `COMMAND_GUILD_ID` | Boş | Slash komutlarını yalnızca bu sunucuya eşitler; boşsa global eşitlenir |
+| `COMMAND_COOLDOWN_SECONDS` | `2` | `!` komutları için kullanıcı başı bekleme süresi; `0` kapatır |
 | `YTDLP_REMOTE_EJS` | `0` | `1` olursa YouTube `yt-dlp` yedeği gerektiğinde GitHub’dan EJS betiği indirebilir; varsayılan kapalıdır |
 | `MAX_LINKS_PER_MESSAGE` | `3` | Tek mesajda işlenen bağlantı sayısı; en fazla 10 |
 | `MAX_CONCURRENT_JOBS` | `2` | Mesaj ve YouTube düğmesi işleri için toplam eşzamanlı sınır; en fazla 10 |
@@ -163,6 +165,7 @@ Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat 
 Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`), işlem süresi, dosya sayısı ve toplam boyut. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Saklama süresi `REQUEST_LOG_RETENTION_DAYS` (varsayılan 30 gün); `REQUEST_LOG_STORE_URL=0` ile URL'ler hiç kaydedilmez.
 
 Discord komutları (izin verilen kanalda):
+- `!yardim` / `!help` → komut listesi ve desteklenen platformlar.
 - `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
   - Aralık: `!stats 24s`, `!stats 7g`, `!stats 30g` (en fazla 30 gün; `s` = saat, `g` = gün).
   - Platform detayı: `!stats instagram`, `!stats 7g instagram` veya `!platform instagram 30g` → o platformun toplam/başarı oranı, dosya-boyut, ortalama süre, kullanıcı/sunucu sayısı ve en çok kullananlar.
@@ -175,6 +178,10 @@ Discord komutları (izin verilen kanalda):
 - `!cache` / `!önbellek` → genel medya ve highlight önbelleğinin kayıt/dosya/boyut ve TTL bilgisi.
 - `!cachetemizle` / `!önbellektemizle` → her iki önbelleği temizler. **Yalnızca `STATS_OWNER_ID`**.
 - Başarısız bir indirmeden sonra bot, bağlantıyı paylaşan kişi (ve sahip) için **🔁 Tekrar dene** butonu gönderir; buton aynı bağlantıyı yeniden işler ve sonucu ayrı bir işlem kaydı olarak yazar.
+
+**Slash komutlar:** `/yardim`, `/stats`, `/info`, `/cache`, `/cachetemizle`, `/hatalar`, `/bakim`, `/metrics` aynı işlevleri buton/argüman desteğiyle sunar. Eşitleme açılışta otomatik yapılır; komutların anında görünmesi için `.env` içine `COMMAND_GUILD_ID=<sunucu_id>` yazın (boşsa global eşitlenir ve Discord'un önbelleği yüzünden bir süre gecikebilir). `!` komutları için kullanıcı başı `COMMAND_COOLDOWN_SECONDS` (varsayılan 2 sn) spam koruması uygulanır; sahip muaftır.
+
+**Yükleme limiti:** `MAX_UPLOAD_MB=0` (varsayılan) iken bot, mesajın geldiği sunucunun gerçek limitini (`guild.filesize_limit`) kullanır. Böylece 10 MB'lık sunucuda boş yere 20 MB dosya indirilmez, 50 MB'lık sunucuda da gereksiz küçültme yapılmaz. Daha büyük bir değer verirseniz tüm sunucularda üst sınır olur.
 
 Kayıtlar tek bir SQLite dosyasında tutulur ama her satır `user_id` (ve `guild_id`) ile ilişkilidir; `!info` yalnızca ilgili kullanıcının satırlarını toplar.
 

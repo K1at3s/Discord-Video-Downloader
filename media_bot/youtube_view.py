@@ -43,13 +43,14 @@ class FormatButton(discord.ui.Button):
 
 class YoutubeChoiceView(discord.ui.LayoutView):
     def __init__(self, *, bot, source_message: discord.Message, link: PostLink, title: str,
-                 request_id: int | None = None):
+                 request_id: int | None = None, upload_limit: int | None = None):
         super().__init__(timeout=300)
         self.bot = bot
         self.source_message = source_message
         self.link = link
         self.title = title
         self.request_id = request_id
+        self.upload_limit = upload_limit or getattr(bot, "upload_bytes", 0)
         self.prompt_message: discord.Message | None = None
         self.selected = False
         escaped = discord.utils.escape_markdown(title[:180])
@@ -102,7 +103,7 @@ class YoutubeChoiceView(discord.ui.LayoutView):
                 with tempfile.TemporaryDirectory(prefix="discord-youtube-") as temporary:
                     try:
                         file, provider = await download_youtube(
-                            self.link, Path(temporary), choice, self.bot.upload_bytes,
+                            self.link, Path(temporary), choice, self.upload_limit,
                             self.bot.cookie_file, self.bot.cobalt_url, self.bot.cobalt_key,
                         )
                         if choice == "mp3":
