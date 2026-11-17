@@ -66,14 +66,18 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **Testler** — `tests/test_ops.py` (15 test): yedek/geri yükleme, saklama
   sınırı, çerez raporu, devre kesici anlık görüntüsü, `/healthz` ve bot payload'ı.
 
+## Discord UX paketi — tamamlandı
+
+- [x] **Sunucu ayarları** — `media_bot/guild_settings.py`: `auto_thread` ve `youtube_quality` (`sor`/`mp3`/`360`/`720`/`1080`) per-sunucu SQLite'da; `!ayar` prefix komutu ve `/ayar` slash komutu, `manage_guild`/sahip ile sınırlı.
+- [x] **Otomatik thread** — `media_bot/bot.py`: `ThreadMessage` dönüştürücü, mesajı thread içinde yanıtlar; `guild_settings.auto_thread` ile açılır/kapanır.
+- [x] **Varsayılan YouTube kalitesi** — `youtube_view.deliver_youtube` yeniden kullanılabilir teslimat yolu; `sor` olduğunda düğme penceresi gösterilir, diğer seçeneklerde direkt indirilir.
+- [x] **Testler** — `tests/test_guild_settings.py` (15 test): ayar kalıcılığı, yetki kontrolü, thread oluşturma, varsayılan kalite yönlendirmesi.
+
 ## Sıradaki paketler
 
-- [ ] **Discord UX**: sunucu bazlı `/ayar` (otomatik thread, varsayılan YouTube
-  kalitesi), thread yönlendirmesi, çok dosyalı ilerleme göstergesi.
-- [ ] **Sağlayıcı dayanıklılığı**: YouTube bot-check algılama/mesajı, `!metrics`
-  içinde devre kesici durumu, gerekirse merkezi kota koordinasyonu.
-- [ ] **CI + benchmark**: GitHub Actions (ruff + testler), sabit link listesiyle
-  `scripts/benchmark.py`.
+- [ ] **Sağlayıcı dayanıklılığı**: YouTube bot-check algılama/mesajı, `!metrics` içinde devre kesici durumu, gerekirse merkezi kota koordinasyonu.
+- [ ] **CI + benchmark**: GitHub Actions (ruff + testler), sabit link listesiyle `scripts/benchmark.py`.
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
 - [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
 - [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.
+- [ ] Çok dosyalı galerilerde canlı "X/Y dosya hazır" ilerleme göstergesi.

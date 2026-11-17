@@ -150,6 +150,12 @@ docker compose -f cobalt.compose.yaml up -d
 - Discord dosyayı yine de "çok büyük" diye reddederse (413), bot videoyu daha düşük bit hızı/480p ile yeniden kodlayıp bir kez daha dener; yine olmazsa sınır mesajı gösterir.
 - Aynı kullanıcı için aynı anda yalnızca bir iş çalışır; sonraki istek sıraya alınır ve geçici durum mesajı gösterilir. Tek mesajdaki birden çok bağlantı ikişerli paralel işlenir ve hazır olan dosya beklemeden yüklenir. Farklı kullanıcılar `MAX_CONCURRENT_JOBS` sınırına kadar paralel işlenir. Aynı bağlantıyı farklı kullanıcılar gönderirse şu anda ayrı indirme yapılır.
 
+## Sunucu ayarları (`/ayar`, `!ayar`)
+
+- Yöneticiler (`Sunucuyu yönet` veya bot sahibi) `!ayar thread ac|kapat` ve `!ayar youtube sor|mp3|360|720|1080` ile sunucu bazlı tercihleri ayarlar; `!ayar` mevcut ayarları gösterir. Slash komutu `/ayar otomatik_thread:` ve `/ayar youtube:` aynı işi yapar.
+- Otomatik thread açıksa, bağlantılı bir mesajın altında bir thread açılır ve sonraki yanıtlar oraya yönlendirilir.
+- YouTube kalitesi `sor` dışında bir değer seçildiğinde düğme penceresi atlanır ve varsayılan kalite doğrudan indirilir. `sor` durumunda kullanıcıya MP3/360/720/1080 düğmeleri gösterilir.
+
 ## +18 koruması ve SQLite
 
 Reddit gönderisi veya subreddit +18 işaretliyse bağlantı yalnızca **NSFW kanalda** veya o kanalın thread'inde işlenir. Kullanıcı başına **Türkiye saatine göre günde bir +18 işlem** hakkı vardır. Hak işlem başladığında tüketilir ve sayaç `DATABASE_PATH` içindeki SQLite dosyasında atomik tutulur; MongoDB sunucusu gerekmez.

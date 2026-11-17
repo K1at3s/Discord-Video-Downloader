@@ -74,7 +74,8 @@ def prune_backups(root: Path, keep: int = 7) -> list[Path]:
 def database_paths(database_path: Path) -> list[Path]:
     """The bot's SQLite files next to ``DATABASE_PATH`` (WAL sidecars excluded)."""
     root = Path(database_path).parent
-    names = {Path(database_path).name, "provider_metrics.sqlite3", "request_log.sqlite3"}
+    names = {Path(database_path).name, "provider_metrics.sqlite3",
+             "request_log.sqlite3", "guild_settings.sqlite3"}
     return [root / name for name in sorted(names)]
 
 

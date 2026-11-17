@@ -31,6 +31,7 @@ from .download import DownloadError, download_media
 from .health import start_health_server
 from .highlight_state import HIGHLIGHTS, format_wait
 from .http import close_shared_clients
+from .guild_settings import QUALITY_CHOICES, SETTINGS, describe
 from .indownio import is_rate_limited_message, resolve_indownio
 from .links import PostLink, find_links, parse_link
 from .job_slots import JobSlots
@@ -47,7 +48,7 @@ from .spotify import fetch_track, find_audio_source
 from .threads_links import highlight_post_link, resolve_threads_link
 from .video_fit import fit_video
 from .x_card import create_card, fetch_post
-from .youtube_view import YoutubeChoiceView
+from .youtube_view import YoutubeChoiceView, deliver_youtube, status_view
 from .youtube import download_youtube
 
 LOG = logging.getLogger(__name__)
@@ -300,9 +301,10 @@ Bağlantı gönder: Instagram, Threads, TikTok, X, Facebook, Reddit, YouTube, Sp
 `/cache` · önbellek durumu
 `/hatalar [aralık]` · son hatalar (sahip)
 `/bakim [ac|kapat]` · bakım modu (sahip)
+`/ayar` · otomatik thread ve YouTube kalitesi (yönetici)
 `/metrics` · sağlayıcı metrikleri
 
-Eski `!` komutları da çalışır."""
+Eski `!` komutları da çalışır (`!ayar`, `!ayar thread ac`)."""
 
 
 class InteractionMessage:
@@ -323,6 +325,28 @@ class InteractionMessage:
         if self.interaction.response.is_done():
             return await self.interaction.followup.send(content=content or None, **kwargs)
         return await self.interaction.response.send_message(content=content or None, **kwargs)
+
+
+class ThreadMessage:
+    """Message-like adapter that sends every reply into an auto-created thread."""
+
+    def __init__(self, original, thread):
+        self.original = original
+        self.thread = thread
+
+    def __getattr__(self, name):
+        return getattr(self.original, name)
+
+    @property
+    def channel(self):
+        return self.thread
+
+    async def reply(self, content: str = "", *, files=None, embed=None, view=None,
+                    mention_author: bool = False, suppress_embeds: bool = False, **kwargs):
+        return await self.thread.send(
+            content=(content or None), files=files or [], embed=embed, view=view,
+            suppress_embeds=suppress_embeds, **kwargs,
+        )
 
 
 class MediaBot(discord.Client):
@@ -453,6 +477,41 @@ class MediaBot(discord.Client):
             if not await self._owner_command(interaction):
                 return
             await run_existing(interaction, self._reply_maintenance, durum)
+
+        @tree.command(name="ayar", description="Sunucu ayarlarını göster veya değiştir (yönetici)")
+        @discord.app_commands.describe(
+            otomatik_thread="Bağlantılar için otomatik thread açılsın mı?",
+            youtube="YouTube bağlantılarında varsayılan kalite",
+        )
+        @discord.app_commands.choices(youtube=[
+            discord.app_commands.Choice(name="Her zaman sor", value="sor"),
+            discord.app_commands.Choice(name="MP3", value="mp3"),
+            discord.app_commands.Choice(name="360p", value="360"),
+            discord.app_commands.Choice(name="720p", value="720"),
+            discord.app_commands.Choice(name="1080p", value="1080"),
+        ])
+        async def ayar(interaction: discord.Interaction,
+                       otomatik_thread: bool | None = None,
+                       youtube: discord.app_commands.Choice[str] | None = None) -> None:
+            guild = interaction.guild
+            if guild is None:
+                await interaction.response.send_message("Bu ayar yalnızca sunucularda kullanılır.", ephemeral=True)
+                return
+            permissions = getattr(interaction.user, "guild_permissions", None)
+            if not (permissions and permissions.manage_guild) and interaction.user.id != self.owner_id:
+                await interaction.response.send_message(
+                    "Bu komut için **Sunucuyu yönet** izni gerekir.", ephemeral=True)
+                return
+            try:
+                settings = SETTINGS.update(
+                    guild.id,
+                    auto_thread=otomatik_thread,
+                    youtube_quality=youtube.value if youtube else None,
+                )
+            except ValueError as exc:
+                await interaction.response.send_message(str(exc), ephemeral=True)
+                return
+            await interaction.response.send_message(describe(settings), ephemeral=True)
 
         self.tree = tree
 
@@ -649,6 +708,81 @@ class MediaBot(discord.Client):
             return
         await self._reply(message, "Kullanım: `!bakim` · `!bakim ac` · `!bakim kapat`")
 
+    def _can_manage_guild(self, author) -> bool:
+        permissions = getattr(author, "guild_permissions", None)
+        return bool((permissions and permissions.manage_guild) or getattr(author, "id", 0) == self.owner_id)
+
+    async def _reply_settings(self, message: discord.Message, argument: str = "") -> None:
+        guild = getattr(message, "guild", None)
+        if guild is None:
+            await self._reply(message, "Bu ayar yalnızca sunucularda kullanılır.")
+            return
+        if not self._can_manage_guild(getattr(message, "author", None)):
+            await self._reply(message, "Bu komut için **Sunucuyu yönet** izni gerekir.")
+            return
+        usage = ("Kullanım: `!ayar` · `!ayar thread ac|kapat` · "
+                 "`!ayar youtube sor|mp3|360|720|1080` · `!ayar sifirla`")
+        tokens = argument.split()
+        changes: dict = {}
+        index = 0
+        while index < len(tokens):
+            token = tokens[index].lower()
+            if token in {"thread", "otomatik_thread", "otothread"}:
+                if index + 1 >= len(tokens):
+                    await self._reply(message, usage)
+                    return
+                value = tokens[index + 1].lower()
+                if value in {"ac", "aç", "on", "1", "evet"}:
+                    changes["auto_thread"] = True
+                elif value in {"kapat", "off", "0", "hayir", "hayır"}:
+                    changes["auto_thread"] = False
+                else:
+                    await self._reply(message, usage)
+                    return
+                index += 2
+            elif token in {"youtube", "kalite"}:
+                if index + 1 >= len(tokens):
+                    await self._reply(message, usage)
+                    return
+                changes["youtube_quality"] = tokens[index + 1]
+                index += 2
+            elif token in {"sifirla", "sıfırla", "reset"}:
+                changes.update(auto_thread=False, youtube_quality="sor")
+                index += 1
+            else:
+                await self._reply(message, usage)
+                return
+        try:
+            settings = SETTINGS.update(guild.id, **changes)
+        except ValueError as exc:
+            await self._reply(message, f"{exc}\nKalite: `sor`, `mp3`, `360`, `720`, `1080`")
+            return
+        await self._reply(message, describe(settings))
+
+    def _youtube_quality(self, message) -> str:
+        guild = getattr(message, "guild", None)
+        if guild is None:
+            return "sor"
+        quality = SETTINGS.get(guild.id).youtube_quality
+        return quality if quality in QUALITY_CHOICES else "sor"
+
+    async def _auto_thread_message(self, message: discord.Message, links: list[PostLink]):
+        """Open a thread for a media post when the guild prefers it."""
+        guild = getattr(message, "guild", None)
+        if guild is None or isinstance(getattr(message, "channel", None), discord.Thread):
+            return message
+        if not SETTINGS.get(guild.id).auto_thread:
+            return message
+        name = " ".join(re.sub(r"https?://\S+", " ", message.content or "").split())[:80]
+        try:
+            thread = await message.create_thread(name=name or "🎬 video",
+                                                 auto_archive_duration=1440)
+        except (discord.HTTPException, AttributeError, TypeError) as exc:
+            LOG.info("Otomatik thread açılamadı: %s", exc)
+            return message
+        LOG.info("Otomatik thread açıldı: %s (%s)", thread.id, name or "video")
+        return ThreadMessage(message, thread)
+
     async def _reply_log_clear(self, message: discord.Message, argument: str) -> None:
         confirmed = "onay" in {token.lower() for token in argument.split()}
         if not confirmed:
@@ -824,12 +958,19 @@ class MediaBot(discord.Client):
             argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_maintenance(message, argument)
             return
+        if content.split(maxsplit=1)[0] in {"!ayar", "!ayarlar", "!settings"}:
+            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+            await self._reply_settings(message, argument)
+            return
         links = find_links(message.content, self.max_links)
         if not links:
             return
         if MAINTENANCE.active and message.author.id != STATS_OWNER_ID:
             await self._reply(message, MAINTENANCE.message)
             return
+        auto_thread = getattr(self, "_auto_thread_message", None)
+        if auto_thread:
+            message = await auto_thread(message, links)
         queue_notice: discord.Message | None = None
 
         async def on_wait() -> None:
@@ -1023,10 +1164,32 @@ class MediaBot(discord.Client):
             await set_status("⏳ Gönderi hazırlanıyor...")
             return await self._handle_reddit(message, link, status_message=status_message)
         if link.platform == "youtube":
-            view = YoutubeChoiceView(bot=self, source_message=message, link=link, title="YouTube videosu",
-                                     upload_limit=upload_limit(message, self.upload_bytes))
-            view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
-            return "pending", [], view
+            limit = upload_limit(message, self.upload_bytes)
+            quality = self._youtube_quality(message)
+            if quality == "sor":
+                view = YoutubeChoiceView(bot=self, source_message=message, link=link,
+                                         title="YouTube videosu", upload_limit=limit)
+                view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
+                return "pending", [], view
+            started = time.monotonic()
+            status = None
+            try:
+                status = await message.reply(
+                    view=status_view("YouTube videosu", f"⏳ **{quality}** hazırlanıyor…"),
+                    mention_author=False, suppress_embeds=True,
+                )
+            except discord.HTTPException as exc:
+                LOG.warning("YouTube durum kartı gönderilemedi: %s", exc)
+            ok, files, detail = await deliver_youtube(
+                self, message, link, quality, limit, started=started,
+            )
+            if status:
+                text = (f"✅ **{detail}** gönderildi." if ok else f"❌ {detail[:300]}")
+                try:
+                    await status.edit(view=status_view("YouTube videosu", text))
+                except discord.HTTPException as exc:
+                    LOG.warning("YouTube durum kartı güncellenemedi: %s", exc)
+            return ("success" if ok else "failure"), files
         if link.platform == "x":
             await set_status("⏳ Gönderi hazırlanıyor...")
             return await self._handle_x(message, link, status_message=status_message)
@@ -1357,6 +1520,7 @@ def main() -> None:
         database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
         _prepare_temp_dir(database_path.parent / "tmp")
         METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
+        SETTINGS.configure(database_path.with_name("guild_settings.sqlite3"))
         REQUESTS.configure(
             database_path.with_name("request_log.sqlite3"),
             retention_days=_positive_int("REQUEST_LOG_RETENTION_DAYS", 30, 3650),
