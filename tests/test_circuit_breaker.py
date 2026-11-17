@@ -1,4 +1,3 @@
-import asyncio
 import ssl
 import tempfile
 import unittest
@@ -57,7 +56,7 @@ class CircuitBreakerTests(unittest.TestCase):
         self.assertTrue(breaker.allow("indown", "instagram"))
 
     def test_provider_fault_classification(self):
-        for error in (asyncio.TimeoutError(), ssl.SSLError("TLS"),
+        for error in (TimeoutError(), ssl.SSLError("TLS"),
                       httpx.ConnectError("connection reset"), "HTTP Error 503",
                       "[SSL: INVALID_SESSION_ID] invalid session id", "zaman aşımı"):
             with self.subTest(error=repr(error)):

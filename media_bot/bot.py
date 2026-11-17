@@ -28,28 +28,28 @@ from .circuit_breaker import BREAKERS
 from .cookiefile import cookie_report, cookie_warning
 from .cooldowns import Cooldowns
 from .download import DownloadError, download_media
+from .guild_settings import QUALITY_CHOICES, SETTINGS, describe
 from .health import start_health_server
 from .highlight_state import HIGHLIGHTS, format_wait
 from .http import close_shared_clients
-from .guild_settings import QUALITY_CHOICES, SETTINGS, describe
 from .indownio import is_rate_limited_message, resolve_indownio
-from .links import PostLink, find_links, parse_link
 from .job_slots import JobSlots
 from .limits import attachment_batches
+from .links import PostLink, find_links, parse_link
 from .maintenance import MAINTENANCE, env_enabled
-from .metadata_fallback import Preview, fetch_preview, preview_embeds
 from .media_cache import MEDIA_CACHE
+from .metadata_fallback import Preview, fetch_preview, preview_embeds
 from .provider_metrics import METRICS
-from .request_log import REQUESTS, _human_bytes, parse_range, resolve_platform
 from .reddit_card import render_reddit_cards
 from .reddit_post import RedditPost, fetch_reddit_post
+from .request_log import REQUESTS, _human_bytes, parse_range, resolve_platform
 from .retry_view import RetryView
 from .spotify import fetch_track, find_audio_source
 from .threads_links import highlight_post_link, resolve_threads_link
 from .video_fit import fit_video
 from .x_card import create_card, fetch_post
-from .youtube_view import YoutubeChoiceView, deliver_youtube, status_view
 from .youtube import download_youtube
+from .youtube_view import YoutubeChoiceView, deliver_youtube, status_view
 
 LOG = logging.getLogger(__name__)
 STATS_OWNER_ID = int(os.getenv("STATS_OWNER_ID", "1065352859195015260"))
@@ -151,7 +151,7 @@ def source_button(url: str) -> discord.ui.View:
 
 def _reel_caption(caption: str) -> tuple[str, str | None, str | None]:
     """Split Instagram's "<text> - @user on <date>" tail into handle and date."""
-    match = re.search(r"\s*-\s*@([\w.]+)\s+on\s+(.+?)\s*$", caption, re.S)
+    match = re.search(r"\s*-\s*@([\w.]+)\s+on\s+(.+?)\s*$", caption, re.DOTALL)
     if not match:
         return caption.strip(), None, None
     return caption[:match.start()].rstrip(), match.group(1), match.group(2).strip()
@@ -176,7 +176,7 @@ def _instagram_date(media_id: str) -> str | None:
 
 def _instagram_story_meta(url: str) -> str | None:
     """`@handle · date` footer for a story link; captions are never shown."""
-    match = re.fullmatch(r"/stories/([^/]+)/(\d*)/?", urlsplit(url).path, re.I)
+    match = re.fullmatch(r"/stories/([^/]+)/(\d*)/?", urlsplit(url).path, re.IGNORECASE)
     if not match or match.group(1).lower() == "highlights":
         return None
     username = match.group(1)
@@ -259,7 +259,7 @@ def media_gallery_view(platform: str, files: list[Path], caption: str | None,
 
 def reddit_embed_preview(link: PostLink, embeds: list[discord.Embed]) -> Preview:
     """Use Discord's Reddit unfurl when Reddit blocks anonymous requests."""
-    subreddit = re.search(r"/r/([^/]+)", urlsplit(link.url).path, re.I)
+    subreddit = re.search(r"/r/([^/]+)", urlsplit(link.url).path, re.IGNORECASE)
     for embed in embeds:
         data = embed.to_dict()
         provider = (data.get("provider") or {}).get("name", "").lower()
@@ -1325,7 +1325,7 @@ class MediaBot(discord.Client):
         title_hint = (preview.title or "")[subreddit_prefix.end():] if subreddit_prefix else None
         try:
             post = await asyncio.wait_for(fetch_reddit_post(link, title_hint), timeout=6)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             post = None
         adult = await reddit_adult_status(post)
         if adult is None:
@@ -1354,7 +1354,7 @@ class MediaBot(discord.Client):
                     preview = await fetch_preview(link)
             display_post = post
             if not display_post and preview.has_content:
-                subreddit = re.search(r"/r/([^/]+)", urlsplit(link.url).path, re.I)
+                subreddit = re.search(r"/r/([^/]+)", urlsplit(link.url).path, re.IGNORECASE)
                 preview_title = preview.title or "Reddit gönderisi"
                 if " · " in preview_title and preview_title.startswith("r/"):
                     preview_title = preview_title.split(" · ", 1)[1]

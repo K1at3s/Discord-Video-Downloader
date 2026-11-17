@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-from http.cookiejar import MozillaCookieJar
 from html.parser import HTMLParser
+from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 

@@ -5,7 +5,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from media_bot.bot import MediaBot, _instagram_story_meta, media_gallery_view
-from media_bot.captions import _page_caption, caption_messages, display_chunks, fetch_caption
+from media_bot.captions import (
+    _page_caption,
+    caption_messages,
+    display_chunks,
+    fetch_caption,
+)
 from media_bot.links import PostLink
 
 
@@ -61,7 +66,7 @@ class CaptionTests(unittest.TestCase):
 class InstagramStoryCardTests(unittest.TestCase):
     def test_story_meta_has_handle_and_date(self):
         moment = datetime(2026, 6, 15, 12, 0)
-        media_id = int(((moment.timestamp() * 1000) - 1314220021721)) << 23
+        media_id = int((moment.timestamp() * 1000) - 1314220021721) << 23
         meta = _instagram_story_meta(f"https://www.instagram.com/stories/nasa/{media_id}/")
         self.assertTrue(meta.startswith("[@nasa](https://www.instagram.com/nasa/"))
         self.assertIn("Haziran 2026", meta)

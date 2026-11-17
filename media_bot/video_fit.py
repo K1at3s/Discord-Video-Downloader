@@ -7,7 +7,6 @@ import json
 import subprocess
 from pathlib import Path
 
-
 VIDEO_SLOTS = asyncio.Semaphore(2)
 
 
@@ -18,7 +17,7 @@ async def _command(*args: str, timeout: int) -> tuple[int, bytes]:
     )
     try:
         stdout, _ = await asyncio.wait_for(process.communicate(), timeout)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         process.kill()
         await process.communicate()
         raise
@@ -65,7 +64,7 @@ async def fit_video(source: Path, target: Path, max_bytes: int, *,
                 )
                 if code == 0 and target.is_file() and 0 < target.stat().st_size <= max_bytes:
                     return True
-        except (OSError, ValueError, KeyError, TypeError, asyncio.TimeoutError):
+        except (TimeoutError, OSError, ValueError, KeyError, TypeError):
             return False
         finally:
             if not target.is_file() or target.stat().st_size > max_bytes:

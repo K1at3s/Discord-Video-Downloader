@@ -71,7 +71,7 @@ def _pct(success: int, failure: int) -> float:
     return (100.0 * success / done) if done else 0.0
 
 
-_RANGE_RE = re.compile(r"(\d{1,4})\s*(saat|sa|s|hour|hours|h|gün|gun|g|day|days|d|hafta|w)?", re.I)
+_RANGE_RE = re.compile(r"(\d{1,4})\s*(saat|sa|s|hour|hours|h|gün|gun|g|day|days|d|hafta|w)?", re.IGNORECASE)
 
 
 def parse_range(value: str) -> int | None:

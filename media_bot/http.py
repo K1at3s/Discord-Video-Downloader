@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-_CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, httpx.AsyncClient]]" = weakref.WeakKeyDictionary()
+_CLIENTS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, httpx.AsyncClient]] = weakref.WeakKeyDictionary()
 
 
 def _timeout_key(timeout: Any) -> tuple:

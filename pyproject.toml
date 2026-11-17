@@ -1,0 +1,25 @@
+[project]
+name = "discord-video-downloader"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Hata ve kullanılmayan içe aktarma odaklı bir başlangıç kümesi. Stil
+# kuralları (SIM, BLE, S110 gibi) mevcut kodda geniş çapta olduğundan şimdilik
+# devre dışı bırakıldı; ilerleyen sürümlerde kademeli olarak etkinleştirilebilir.
+lint.select = ["E", "F"]
+lint.ignore = ["E501"]
+lint.exclude = [
+    ".git",
+    ".venv",
+    "vendor",
+    "data",
+    "downloads",
+    "__pycache__",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

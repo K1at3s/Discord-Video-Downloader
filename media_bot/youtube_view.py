@@ -84,7 +84,7 @@ async def deliver_youtube(bot, source_message, link: PostLink, choice: str,
             )
             LOG.info("YouTube choice %s delivered via %s", choice, provider)
             return True, files, delivered_label
-    except (DownloadError, discord.HTTPException, OSError, asyncio.TimeoutError) as exc:
+    except (TimeoutError, DownloadError, discord.HTTPException, OSError) as exc:
         LOG.warning("YouTube choice %s failed: %s", choice, exc)
         REQUESTS.update(
             request_id,

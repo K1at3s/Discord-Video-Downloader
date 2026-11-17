@@ -179,12 +179,12 @@ Reddit'in +18 durumu doğrulanamazsa bağlantı işlenmez. Bu denetim **Reddit'e
 | `media_bot/request_log.py` | Sunucu/kullanıcı/link bazlı işlem kayıtları ve başarı yüzdesi özeti |
 | `media_bot/http.py`, `sqlite_util.py` | Paylaşılan HTTP bağlantı havuzu ve WAL ayarlı SQLite bağlantıları |
 | `media_bot/job_slots.py` | Toplam ve kullanıcı başına eşzamanlılık sınırı |
-| `media_bot/http.py`, `sqlite_util.py` | Paylaşılan HTTP bağlantı havuzu ve WAL ayarlı SQLite bağlantıları |
 | `media_bot/health.py` | `/healthz` için stdlib HTTP sunucusu |
 | `media_bot/backup.py` | Günlük SQLite yedekleri ve eski klasörlerin temizliği |
 | `media_bot/cookiefile.py` | Çerez biçimi/son kullanma raporu ve Netscape kontrolü |
 | `scripts/defender-exclusions.ps1` | Windows Defender istisnaları (yönetici olarak çalıştırılır) |
 | `scripts/install-autostart.ps1`, `run-bot-loop.ps1` | Açılışta otomatik başlatma ve çökme sonrası yeniden deneme |
+| `scripts/benchmark.py` | Sabit link listesiyle sağlayıcı/süre ölçüm raporu |
 | `tests/` | Birim ve akış testleri |
 
 Firefox eklentisi ayrı bir yerel çalışma klasörüdür; `.gitignore` içinde tutulur ve bu repoya dahil edilmez.
@@ -245,6 +245,31 @@ Komut satırından:
 ```
 
 Testler, üçüncü taraf web servislerinin her zaman çalışacağını garanti etmez; canlı testi herkese açık bir bağlantıyla ayrıca yapın.
+
+## CI ve benchmark
+
+Her `push` / `pull_request` aşamasında [`.github/workflows/ci.yml`](.github/workflows/ci.yml) şu adımları çalıştırır:
+
+- `ruff check` — kod kalitesi ve kullanılmayan içe aktarma denetimi (`pyproject.toml` ile yapılandırılmış)
+- `python -m unittest discover -s tests -q` — tüm birim ve akış testleri
+
+İş akışı `windows-latest` ve `ubuntu-latest` üzerinde Python 3.12 ile çalışır.
+
+### Benchmark
+
+`scripts/benchmark.py`, sabit bir bağlantı listesini `download_media` üzerinden ölçüp sağlayıcı bazlı p50/p95 süre raporu üretir:
+
+```powershell
+# links.txt oluştur: satır başına bir bağlantı
+@'
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+https://www.tiktok.com/@user/video/123456789
+'@ | Set-Content links.txt -Encoding utf8
+
+\.venv\Scripts\python.exe scripts\benchmark.py links.txt rapor.json
+```
+
+Çıktı `rapor.json` dosyasına yazılır ve konsola sağlayıcı başına ortalama/p95 süreleri basılır. Discord'a bağlanma gerekmez; yalnızca indirme çekirdeği çalıştırılır.
 
 - **Bot açılmıyor:** Message Content Intent ve token'ı kontrol edin.
 - **Bot yanıt vermiyor:** Desteklenen tekil bağlantı biçimini, kanal izinlerini ve `CHANNEL_IDS` filtresini kontrol edin.

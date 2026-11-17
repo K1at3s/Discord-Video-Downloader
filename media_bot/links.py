@@ -48,15 +48,15 @@ def parse_link(raw: str) -> PostLink | None:
     # Strip tracking query strings. Keep the original path for short-link redirects.
     clean = urlunsplit(("https", host, path, "", ""))
     if host in {"x.com", "twitter.com", "www.x.com", "www.twitter.com", "mobile.twitter.com"}:
-        match = re.fullmatch(r"/(?:i|[^/]+)/status/(\d+)(?:/.*)?", path, re.I)
+        match = re.fullmatch(r"/(?:i|[^/]+)/status/(\d+)(?:/.*)?", path, re.IGNORECASE)
         if match:
             return PostLink("x", clean, match.group(1))
     elif _host(host, "instagram.com"):
-        if re.fullmatch(r"/(?:p|reel|tv)/[\w-]+/?", path, re.I):
+        if re.fullmatch(r"/(?:p|reel|tv)/[\w-]+/?", path, re.IGNORECASE):
             return PostLink("instagram", clean)
-        if re.search(r"/stories/", path, re.I) or re.fullmatch(r"/story/[\w-]+/?", path, re.I) or re.search(r"/highlights/", path, re.I):
+        if re.search(r"/stories/", path, re.IGNORECASE) or re.fullmatch(r"/story/[\w-]+/?", path, re.IGNORECASE) or re.search(r"/highlights/", path, re.IGNORECASE):
             return PostLink("instagram", clean)
-        if match := re.fullmatch(r"/s/([A-Za-z0-9_-]+)/?", path, re.I):
+        if match := re.fullmatch(r"/s/([A-Za-z0-9_-]+)/?", path, re.IGNORECASE):
             decoded = _decode_instagram_short_token(match.group(1))
             if decoded and decoded.startswith("highlight:"):
                 highlight_id = decoded.split(":", 1)[1]
@@ -65,10 +65,10 @@ def parse_link(raw: str) -> PostLink | None:
                 shortcode = decoded.split(":", 1)[1]
                 return PostLink("instagram", f"https://www.instagram.com/p/{shortcode}/")
     elif _host(host, "tiktok.com"):
-        if re.fullmatch(r"/@[^/]+/(?:video|photo)/\d+/?", path, re.I) or (host in {"vm.tiktok.com", "vt.tiktok.com"} and re.fullmatch(r"/[\w-]+/?", path)):
+        if re.fullmatch(r"/@[^/]+/(?:video|photo)/\d+/?", path, re.IGNORECASE) or (host in {"vm.tiktok.com", "vt.tiktok.com"} and re.fullmatch(r"/[\w-]+/?", path)):
             return PostLink("tiktok", clean)
     elif _host(host, "facebook.com") or host in {"fb.watch", "www.fb.watch"}:
-        if host.endswith("fb.watch") or re.search(r"/(?:reel|videos|watch|share/[vpr]|posts|photos)/", path, re.I) or path == "/photo.php" or (path == "/watch/" and "v=" in parts.query):
+        if host.endswith("fb.watch") or re.search(r"/(?:reel|videos|watch|share/[vpr]|posts|photos)/", path, re.IGNORECASE) or path == "/photo.php" or (path == "/watch/" and "v=" in parts.query):
             # watch?v needs the query to identify the video.
             if path == "/watch/":
                 match = re.search(r"(?:^|&)v=(\d+)(?:&|$)", parts.query)
@@ -82,9 +82,9 @@ def parse_link(raw: str) -> PostLink | None:
                 clean += "?fbid=" + match.group(1)
             return PostLink("facebook", clean)
     elif _host(host, "reddit.com") or host in {"redd.it", "www.redd.it"}:
-        match = re.search(r"/comments/([a-z0-9]+)", path, re.I) or re.fullmatch(r"/gallery/([a-z0-9]+)/?", path, re.I)
-        short = re.fullmatch(r"/r/[^/]+/s/([A-Za-z0-9]+)/?", path, re.I)
-        if match or short or (host.endswith("redd.it") and re.fullmatch(r"/[a-z0-9]+/?", path, re.I)):
+        match = re.search(r"/comments/([a-z0-9]+)", path, re.IGNORECASE) or re.fullmatch(r"/gallery/([a-z0-9]+)/?", path, re.IGNORECASE)
+        short = re.fullmatch(r"/r/[^/]+/s/([A-Za-z0-9]+)/?", path, re.IGNORECASE)
+        if match or short or (host.endswith("redd.it") and re.fullmatch(r"/[a-z0-9]+/?", path, re.IGNORECASE)):
             return PostLink("reddit", clean, match.group(1) if match else None)
     elif _host(host, "threads.com") or _host(host, "threads.net"):
         if re.fullmatch(r"/@[^/]+/post/[A-Za-z0-9_-]+(?:/media)?/?", path) or re.fullmatch(r"/(?:t|share|s)/[A-Za-z0-9_.:-]+/?", path):
@@ -106,7 +106,7 @@ def parse_link(raw: str) -> PostLink | None:
         match = re.fullmatch(
             r"/(?:intl-[A-Za-z]{2}(?:-[A-Za-z]{2})?/)?(track|album|episode|show|artist|playlist)/([A-Za-z0-9]+)/?",
             path,
-            re.I,
+            re.IGNORECASE,
         )
         if match:
             return PostLink("spotify", f"https://open.spotify.com/{match.group(1).lower()}/{match.group(2)}")

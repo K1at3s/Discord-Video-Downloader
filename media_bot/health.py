@@ -12,9 +12,9 @@ LOG = logging.getLogger(__name__)
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server: "HealthServer"
+    server: HealthServer
 
-    def do_GET(self) -> None:  # noqa: N802 - http.server API
+    def do_GET(self) -> None:
         if self.path.split("?", 1)[0] not in {"/", "/healthz"}:
             self.send_error(404)
             return

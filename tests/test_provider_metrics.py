@@ -1,8 +1,8 @@
-import tempfile
 import sqlite3
+import tempfile
 import time
-from contextlib import closing
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 

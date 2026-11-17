@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from media_bot.bot import MediaBot, ThreadMessage
-from media_bot.guild_settings import GuildSettings, GuildSettingsStore, SETTINGS
+from media_bot.guild_settings import SETTINGS, GuildSettings, GuildSettingsStore
 from media_bot.links import PostLink
 
 

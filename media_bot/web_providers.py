@@ -17,10 +17,10 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
-from .http import shared_client
 from .direct_providers import _stream, _suffix, allowed_media_url
-from .links import PostLink
+from .http import shared_client
 from .limits import MAX_MEDIA_ITEMS
+from .links import PostLink
 from .threads_links import CONTENT_HEADERS, _threads_cookies
 from .video_fit import fit_video
 
@@ -81,7 +81,7 @@ def _indown_urls(markup: str) -> list[tuple[str, str]]:
         if "download-items" not in item["classes"] or not allowed_media_url(url, "indown"):
             continue
         label = (str(item["text"]) + " " + str(item["title"])).lower()
-        kind = "video" if re.search(r"video|mp4|reel", label) or re.search(r"\.(?:mp4|mov|webm)(?:\?|$)", url, re.I) else "photo"
+        kind = "video" if re.search(r"video|mp4|reel", label) or re.search(r"\.(?:mp4|mov|webm)(?:\?|$)", url, re.IGNORECASE) else "photo"
         entries = blocks.setdefault(str(item["block"]), [])
         if url not in [entry[0] for entry in entries]:
             entries.append((url, kind))
@@ -177,7 +177,7 @@ def _threads_page_urls(markup: str, post_id: str) -> list[tuple[str, str]]:
         return any(visit(item, depth + 1) for item in value.values())
 
     for match in re.finditer(r'<script\b[^>]*\btype=["\']application/json["\'][^>]*>(.*?)</script>',
-                             markup, re.I | re.S):
+                             markup, re.IGNORECASE | re.DOTALL):
         try:
             if visit(json.loads(match.group(1))):
                 return found
@@ -190,7 +190,7 @@ def _threads_page_urls(markup: str, post_id: str) -> list[tuple[str, str]]:
 def _threadsdl_urls(markup: str) -> list[tuple[str, str]]:
     """Undo the download site's proxy prefix to reach the original CDN URL."""
     found: list[tuple[str, str]] = []
-    for match in re.finditer(r'<(img|video)\b[^>]*\bsrc="([^"]+)"', markup, re.I):
+    for match in re.finditer(r'<(img|video)\b[^>]*\bsrc="([^"]+)"', markup, re.IGNORECASE):
         proxied = html.unescape(match.group(2))
         parts = urlsplit(proxied)
         if (parts.hostname or "").lower() != "cdn.threadsphotodownloader.com":

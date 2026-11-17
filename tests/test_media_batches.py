@@ -7,8 +7,8 @@ from unittest.mock import patch
 from media_bot.bot import MediaBot, media_gallery_view
 from media_bot.direct_providers import tikwm_media_urls
 from media_bot.download import media_files
-from media_bot.links import PostLink
 from media_bot.limits import attachment_batches
+from media_bot.links import PostLink
 
 
 class MediaBatchTests(unittest.TestCase):

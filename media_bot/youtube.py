@@ -14,15 +14,15 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .http import shared_client
-from .cobalt import download_cobalt
+from . import provider_memory
 from .circuit_breaker import BREAKERS, provider_fault
+from .cobalt import download_cobalt
 from .direct_providers import _stream, allowed_media_url
 from .download import DownloadError, _run
+from .http import shared_client
 from .links import PostLink
-from . import provider_memory
-from .race import first_success
 from .provider_metrics import METRICS
+from .race import first_success
 
 LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
@@ -55,7 +55,7 @@ _UNSAFE_FILENAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 _NOISE = re.compile(
     r"\s*[\(\[][^)\]]*\b(?:official|officiel|video|audio|lyrics?|lyric|music|m/?v|mv|hd|hq|4k|8k|"
     r"remaster(?:ed)?|visuali[sz]er|clip|premiere)\b[^)\]]*[\)\]]",
-    re.I,
+    re.IGNORECASE,
 )
 
 
@@ -96,7 +96,7 @@ def gendownload_options(data: dict, choice: str, max_bytes: int) -> list[tuple[s
             if item.get("type") == "audio" and extension in {"mp3", "m4a", "webm"}:
                 options.append((1 if extension == "mp3" else 0, url, extension))
         elif item.get("type") == "video" and extension == "mp4":
-            match = re.search(r"(\d{3,4})p", str(item.get("label", "")), re.I)
+            match = re.search(r"(\d{3,4})p", str(item.get("label", "")), re.IGNORECASE)
             height = int(match.group(1)) if match else 0
             if height and height <= int(choice):
                 options.append((height, url, "mp4"))
@@ -113,7 +113,7 @@ async def _to_mp3(source: Path, target: Path, max_bytes: int) -> bool:
     )
     try:
         await asyncio.wait_for(proc.communicate(), timeout=90)
-    except (asyncio.TimeoutError, asyncio.CancelledError):
+    except (TimeoutError, asyncio.CancelledError):
         proc.kill()
         await proc.communicate()
         if target.exists():
@@ -225,13 +225,13 @@ async def video_height(path: Path) -> int | None:
         )
         try:
             output, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, asyncio.CancelledError):
             proc.kill()
             await proc.communicate()
             raise
         height = int(output.strip()) if proc.returncode == 0 else 0
         return height if height > 0 else None
-    except (OSError, ValueError, asyncio.TimeoutError):
+    except (TimeoutError, OSError, ValueError):
         return None
 
 
@@ -283,7 +283,7 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
                        "no_media" if not error else "error")
             await asyncio.to_thread(METRICS.record, "youtube", name, outcome, int((time.monotonic() - started) * 1000))
             failures.append(f"{name}: {error or 'uygun dosya yok'}")
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             if BREAKERS.failure(name, "youtube"):
                 LOG.warning("Provider cooldown opened: %s/youtube", name)
             reported = True

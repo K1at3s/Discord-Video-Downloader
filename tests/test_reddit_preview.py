@@ -1,9 +1,9 @@
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import discord
-from unittest.mock import patch
 
 from media_bot.bot import MediaBot, reddit_embed_preview
 from media_bot.links import PostLink

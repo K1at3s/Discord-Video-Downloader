@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import discord
 import httpx
 
+from .direct_providers import _facebook_page, _Meta, allowed_media_url
 from .http import shared_client
-from .direct_providers import _Meta, _facebook_page, allowed_media_url
 from .links import PostLink
 
 

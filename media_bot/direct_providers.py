@@ -12,8 +12,8 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 
 from .http import shared_client
-from .links import PostLink, parse_link
 from .limits import MAX_MEDIA_ITEMS
+from .links import PostLink, parse_link
 from .x_card import fetch_post
 
 LOG = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ def reddit_media_urls(data: dict) -> list[tuple[str, str]]:
     if urls:
         return urls
     direct = data.get("url_overridden_by_dest") or data.get("url")
-    if isinstance(direct, str) and allowed_media_url(direct, "reddit") and re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)", direct, re.I):
+    if isinstance(direct, str) and allowed_media_url(direct, "reddit") and re.search(r"\.(?:jpg|jpeg|png|webp|gif)(?:\?|$)", direct, re.IGNORECASE):
         return [(html.unescape(direct), "photo")]
     video = ((data.get("secure_media") or data.get("media") or {}).get("reddit_video") or {}).get("fallback_url")
     if isinstance(video, str):
@@ -225,7 +225,7 @@ async def download_direct(link: PostLink, folder: Path, max_bytes: int) -> tuple
                 post = await fetch_post(link.post_id or "", enrich_quotes=False)
                 urls = x_media_urls(post) if post else []
             elif link.platform == "reddit":
-                match = re.search(r"/comments/([a-z0-9]+)|/gallery/([a-z0-9]+)|redd\.it/([a-z0-9]+)", link.url, re.I)
+                match = re.search(r"/comments/([a-z0-9]+)|/gallery/([a-z0-9]+)|redd\.it/([a-z0-9]+)", link.url, re.IGNORECASE)
                 if not match:
                     return 0, "unsupported Reddit URL"
                 post_id = next(group for group in match.groups() if group)

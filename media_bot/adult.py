@@ -12,8 +12,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from .http import shared_client
-from .sqlite_util import open_db
 from .reddit_post import ARCTIC, PULLPUSH, RedditPost
+from .sqlite_util import open_db
 
 TIMEOUT = httpx.Timeout(5, connect=3)
 

@@ -12,8 +12,8 @@ from pathlib import Path
 import discord
 import httpx
 
+from .direct_providers import _facebook_page, _Meta
 from .http import shared_client
-from .direct_providers import _Meta, _facebook_page
 from .links import PostLink
 from .race import first_success
 from .reddit_post import fetch_reddit_post
@@ -42,7 +42,7 @@ def _page_caption(page: str, platform: str, *, allow_truncated: bool = False) ->
         # The trailing quote is often missing when the caption is truncated, so
         # strip the prefix itself instead of matching a quoted tail.
         description = re.sub(r"^[\d.,]+[KMB]?\s+(?:likes?|views?|beğenme|görüntüleme)\b[^:]{0,120}:\s*",
-                             "", description, count=1, flags=re.I)
+                             "", description, count=1, flags=re.IGNORECASE)
         description = description.strip()
         if description[:1] in {'"', "“"}:
             description = description[1:]
@@ -53,13 +53,13 @@ def _page_caption(page: str, platform: str, *, allow_truncated: bool = False) ->
     cleaned = _clean(description)
     if platform == "threads" and cleaned and cleaned.lower().startswith("join threads to share ideas"):
         return None
-    if cleaned and (allow_truncated or not cleaned.endswith(("...", "…"))) and not re.search(r"^(?:log in|sign up|facebook helps you|see posts, photos)", cleaned, re.I):
+    if cleaned and (allow_truncated or not cleaned.endswith(("...", "…"))) and not re.search(r"^(?:log in|sign up|facebook helps you|see posts, photos)", cleaned, re.IGNORECASE):
         return cleaned
     return None
 
 
 def _reddit_id(url: str) -> str | None:
-    match = re.search(r"/comments/([a-z0-9]+)|/gallery/([a-z0-9]+)|redd\.it/([a-z0-9]+)", url, re.I)
+    match = re.search(r"/comments/([a-z0-9]+)|/gallery/([a-z0-9]+)|redd\.it/([a-z0-9]+)", url, re.IGNORECASE)
     return next((group for group in match.groups() if group), None) if match else None
 
 
@@ -128,7 +128,7 @@ async def _gallery_caption(link: PostLink, cookie_file: Path) -> str | None:
     )
     try:
         output, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.communicate()
         return None
@@ -138,7 +138,7 @@ async def _gallery_caption(link: PostLink, cookie_file: Path) -> str | None:
 
 
 async def fetch_caption(link: PostLink, cookie_file: Path | None = None) -> str | None:
-    if link.platform == "instagram" and re.search(r"/(?:stories|story|highlights)/", link.url, re.I):
+    if link.platform == "instagram" and re.search(r"/(?:stories|story|highlights)/", link.url, re.IGNORECASE):
         # Story and highlight pages expose only profile counters, not a caption.
         return None
     routes = {
@@ -181,7 +181,7 @@ async def fetch_caption(link: PostLink, cookie_file: Path | None = None) -> str 
             complete = await asyncio.wait_for(first_success(routes, attempt, stagger=0, parallel=2), timeout=5)
         else:
             complete = await first_success(routes, attempt, stagger=0, parallel=2)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         complete = None
     return complete or preview
 

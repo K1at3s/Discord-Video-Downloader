@@ -106,8 +106,7 @@ class ProviderMetrics:
         provider = str(row[0])
         # Cache paths record suffixed names such as "indownio-cache"; they are
         # not real providers, so normalise them for the fast path.
-        if provider.endswith("-cache"):
-            provider = provider[: -len("-cache")]
+        provider = provider.removesuffix("-cache")
         return provider
 
     def p95_ms(self, platform: str, provider: str, hours: float = 24, *, min_samples: int = 3) -> int:

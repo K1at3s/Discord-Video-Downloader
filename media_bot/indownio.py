@@ -18,10 +18,10 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
-from .http import shared_client
 from .direct_providers import _stream, _suffix, allowed_media_url
-from .links import PostLink
+from .http import shared_client
 from .limits import MAX_MEDIA_ITEMS
+from .links import PostLink
 from .video_fit import fit_video
 
 try:  # Optional at import time so a missing wheel cannot break the bot.
@@ -55,7 +55,7 @@ def page_for(url: str) -> str:
 
 def story_id(url: str) -> str | None:
     """The media id of a single story link, but not of a highlight album."""
-    match = re.search(r"/stories/(?!highlights/)[^/]+/(\d{5,})", urlsplit(url).path, re.I)
+    match = re.search(r"/stories/(?!highlights/)[^/]+/(\d{5,})", urlsplit(url).path, re.IGNORECASE)
     return match.group(1) if match else None
 
 

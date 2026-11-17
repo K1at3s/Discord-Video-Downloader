@@ -7,7 +7,6 @@ from media_bot.direct_providers import canonical_facebook_post
 from media_bot.download import download_media
 from media_bot.links import parse_link
 
-
 SHARE = "https://www.facebook.com/share/p/1518UcDYZPU/"
 POST = "https://www.facebook.com/groups/750797692117425/posts/2462080954322415/"
 

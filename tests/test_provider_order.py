@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from media_bot.download import DownloadError, _yt_dlp, download_media, looks_private, provider_order
+from media_bot.download import (
+    DownloadError,
+    _yt_dlp,
+    download_media,
+    looks_private,
+    provider_order,
+)
 from media_bot.links import PostLink
 
 
@@ -93,7 +99,6 @@ class InstagramStoryRouteTests(unittest.IsolatedAsyncioTestCase):
 
         async def fake_first_success(providers, attempt, stagger=0, **_kwargs):
             order.append(tuple(providers))
-            return None
 
         with tempfile.TemporaryDirectory() as temp:
             link = PostLink("instagram", "https://www.instagram.com/stories/natgeo/4029782063186981984/")
@@ -117,7 +122,6 @@ class InstagramStoryRouteTests(unittest.IsolatedAsyncioTestCase):
 
         async def fake_first_success(providers, attempt, stagger=0, **_kwargs):
             order.append(tuple(providers))
-            return None
 
         with tempfile.TemporaryDirectory() as temp:
             link = PostLink("instagram", "https://www.instagram.com/stories/highlights/17919681140787123/")

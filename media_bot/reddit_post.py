@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
@@ -79,7 +79,7 @@ class _Body(HTMLParser):
 
 
 def _subreddit(link: PostLink) -> str | None:
-    match = re.search(r"^/r/([A-Za-z0-9_]+)(?:/|$)", urlsplit(link.url).path, re.I)
+    match = re.search(r"^/r/([A-Za-z0-9_]+)(?:/|$)", urlsplit(link.url).path, re.IGNORECASE)
     return match.group(1) if match else None
 
 
@@ -113,11 +113,11 @@ def _rss_post(xml: str, link: PostLink, title_hint: str | None) -> RedditPost | 
         content = entry.findtext(f"{ATOM}content") or ""
         parser = _Body()
         parser.feed(content)
-        submitted_link = re.search(r'<a\s+[^>]*href="([^"]+)"[^>]*>\s*\[link\]\s*</a>', content, re.I)
+        submitted_link = re.search(r'<a\s+[^>]*href="([^"]+)"[^>]*>\s*\[link\]\s*</a>', content, re.IGNORECASE)
         target = unescape(submitted_link.group(1)) if submitted_link else ""
         target_path = urlsplit(target).path
-        is_self = (bool(re.search(rf"/comments/{re.escape(post_id)}(?:/|$)", target_path, re.I))
-                   and not re.search(r"<img\b|<video\b", content, re.I)) if target else None
+        is_self = (bool(re.search(rf"/comments/{re.escape(post_id)}(?:/|$)", target_path, re.IGNORECASE))
+                   and not re.search(r"<img\b|<video\b", content, re.IGNORECASE)) if target else None
         author = (entry.findtext(f"{ATOM}author/{ATOM}name") or "").removeprefix("/u/")
         published_raw = entry.findtext(f"{ATOM}published") or entry.findtext(f"{ATOM}updated")
         try:
@@ -146,13 +146,13 @@ def _archive_post(data: object, subreddit: str, post_id: str) -> RedditPost | No
             body = ""
         raw_url = f"https://www.reddit.com/r/{subreddit}/comments/{post_id}/"
         timestamp = row.get("created_utc")
-        published = datetime.fromtimestamp(timestamp, timezone.utc) if isinstance(timestamp, (int, float)) else None
+        published = datetime.fromtimestamp(timestamp, UTC) if isinstance(timestamp, (int, float)) else None
         score = row.get("score") if isinstance(row.get("score"), int) else None
         comments = row.get("num_comments") if isinstance(row.get("num_comments"), int) else None
         is_self = row.get("is_self") if isinstance(row.get("is_self"), bool) else None
         if is_self is None and isinstance(row.get("url"), str):
             target_path = urlsplit(row["url"]).path
-            is_self = bool(re.search(rf"/comments/{re.escape(post_id)}(?:/|$)", target_path, re.I))
+            is_self = bool(re.search(rf"/comments/{re.escape(post_id)}(?:/|$)", target_path, re.IGNORECASE))
         over_18 = row.get("over_18") if isinstance(row.get("over_18"), bool) else None
         return RedditPost(title, body.strip(), subreddit, str(row.get("author") or ""),
                           raw_url, published, score, comments, is_self, over_18)

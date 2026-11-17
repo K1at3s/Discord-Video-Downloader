@@ -73,10 +73,16 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **Varsayılan YouTube kalitesi** — `youtube_view.deliver_youtube` yeniden kullanılabilir teslimat yolu; `sor` olduğunda düğme penceresi gösterilir, diğer seçeneklerde direkt indirilir.
 - [x] **Testler** — `tests/test_guild_settings.py` (15 test): ayar kalıcılığı, yetki kontrolü, thread oluşturma, varsayılan kalite yönlendirmesi.
 
+## CI + benchmark paketi — tamamlandı
+
+- [x] **GitHub Actions CI** — `.github/workflows/ci.yml`: `push`/`pull_request`'te `ruff check` + tam test paketi (`windows-latest`, `ubuntu-latest`, Python 3.12).
+- [x] **Ruff yapılandırması** — `pyproject.toml`: `E` (pycodestyle hataları) ve `F` (pyflakes) kural kümesi; `E501` hariç, `vendor`/`data`/`.venv` hariç.
+- [x] **Benchmark aracı** — `scripts/benchmark.py`: `links.txt` dosyasındaki bağlantıları `download_media` ile ölçer, sağlayıcı/platform bazlı p50/p95 raporu üretir (`rapor.json`). Discord'a bağlanma gerekmez.
+- [x] **Testler** — 252 test geçiyor; CI'de her push'ta çalışır.
+
 ## Sıradaki paketler
 
 - [ ] **Sağlayıcı dayanıklılığı**: YouTube bot-check algılama/mesajı, `!metrics` içinde devre kesici durumu, gerekirse merkezi kota koordinasyonu.
-- [ ] **CI + benchmark**: GitHub Actions (ruff + testler), sabit link listesiyle `scripts/benchmark.py`.
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
 - [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
 - [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.

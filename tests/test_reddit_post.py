@@ -1,6 +1,6 @@
 import unittest
-from xml.sax.saxutils import escape
 from unittest.mock import patch
+from xml.sax.saxutils import escape
 
 import httpx
 

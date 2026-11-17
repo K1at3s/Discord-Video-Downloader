@@ -1,7 +1,14 @@
 import json
 import unittest
 
-from media_bot.web_providers import _btch_urls, _embed_media, _indown_urls, _rapidsave_url, _tiktokio_urls, _vette_urls
+from media_bot.web_providers import (
+    _btch_urls,
+    _embed_media,
+    _indown_urls,
+    _rapidsave_url,
+    _tiktokio_urls,
+    _vette_urls,
+)
 
 
 class WebProviderParsingTests(unittest.TestCase):

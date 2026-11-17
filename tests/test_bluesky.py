@@ -6,7 +6,14 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from media_bot.bluesky import BlueskyPost, _api_get, _variants, _video_url, download_bluesky_media, parse_post
+from media_bot.bluesky import (
+    BlueskyPost,
+    _api_get,
+    _variants,
+    _video_url,
+    download_bluesky_media,
+    parse_post,
+)
 from media_bot.bot import MediaBot, media_gallery_view
 from media_bot.links import parse_link
 

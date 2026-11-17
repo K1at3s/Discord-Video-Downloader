@@ -25,7 +25,7 @@ from .sqlite_util import open_db
 
 LOG = logging.getLogger(__name__)
 
-HIGHLIGHT_RE = re.compile(r"/stories/highlights/(\d+)/?", re.I)
+HIGHLIGHT_RE = re.compile(r"/stories/highlights/(\d+)/?", re.IGNORECASE)
 MEDIA_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ISTANBUL = timezone(timedelta(hours=3))
 

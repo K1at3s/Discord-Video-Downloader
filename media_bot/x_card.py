@@ -6,11 +6,12 @@ import asyncio
 import io
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
 from .http import shared_client
 
 LOG = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def normalize_vxtwitter(data: dict, *, include_quote: bool = True) -> dict | Non
     date = data.get("date") or ""
     epoch = data.get("date_epoch")
     if isinstance(epoch, (int, float)):
-        date = datetime.fromtimestamp(epoch, timezone.utc).isoformat()
+        date = datetime.fromtimestamp(epoch, UTC).isoformat()
     quote = data.get("qrt")
     return {
         "id": data.get("tweetID"),

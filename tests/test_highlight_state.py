@@ -2,7 +2,7 @@ import json
 import tempfile
 import time
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from media_bot.highlight_state import (

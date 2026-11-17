@@ -12,7 +12,6 @@ from media_bot.threads_links import (
     resolve_threads_link,
 )
 
-
 SHORT = "https://www.threads.com/share/BAaTVei4V4"
 POST = "https://www.threads.com/@zehrayahsii0/post/DfotDeOCJ1t"
 HIGHLIGHT_SHORT = "https://www.threads.com/s/highlight:18129769924466391"

@@ -11,9 +11,9 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from .http import shared_client
 from .direct_providers import _stream, allowed_media_url
 from .download import _run
+from .http import shared_client
 from .links import PostLink
 
 API = "https://public.api.bsky.app/xrpc"

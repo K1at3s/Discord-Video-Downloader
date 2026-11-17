@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from media_bot.bot import InteractionMessage, MediaBot, UPLOAD_CEILING, upload_limit
+from media_bot.bot import UPLOAD_CEILING, InteractionMessage, MediaBot, upload_limit
 from media_bot.cooldowns import Cooldowns
 
 MB = 1024 * 1024

@@ -10,8 +10,8 @@ from media_bot.direct_providers import (
     facebook_media_urls,
     reddit_media_urls,
     tikwm_media_urls,
-    x_media_urls,
     vx_media_urls,
+    x_media_urls,
 )
 from media_bot.links import parse_link
 from media_bot.x_card import normalize_vxtwitter

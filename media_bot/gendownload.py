@@ -8,10 +8,10 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .http import shared_client
 from .direct_providers import _stream, allowed_media_url
-from .links import PostLink
+from .http import shared_client
 from .limits import MAX_MEDIA_ITEMS
+from .links import PostLink
 
 
 def media_options(data: dict, max_bytes: int) -> tuple[list[tuple[str, str]], list[str]]:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -16,15 +15,19 @@ from . import provider_memory
 from .circuit_breaker import BREAKERS, provider_fault
 from .cobalt import download_cobalt
 from .cookiefile import netscape_jar
-from .direct_providers import canonical_facebook_post, download_direct, download_vxtwitter
+from .direct_providers import (
+    canonical_facebook_post,
+    download_direct,
+    download_vxtwitter,
+)
 from .gendownload import download_gendownload
 from .highlight_state import HIGHLIGHTS, format_wait, highlight_id
 from .indownio import download_indownio, is_rate_limited_message
-from .links import PostLink
 from .limits import MAX_MEDIA_ITEMS
+from .links import PostLink
 from .media_cache import MEDIA_CACHE
-from .race import first_success
 from .provider_metrics import METRICS
+from .race import first_success
 from .threads_links import highlight_post_link
 from .web_providers import download_web
 
@@ -86,7 +89,7 @@ async def _run(command: list[str], timeout: int = PROCESS_TIMEOUT, folder: Path 
         while not communication.done():
             try:
                 await asyncio.wait_for(asyncio.shield(communication), timeout=1)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if asyncio.get_running_loop().time() >= deadline:
                     proc.kill()
                     await communication
@@ -246,7 +249,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 try:
                     count, error = await asyncio.wait_for(download_direct(link, target, max_bytes), timeout=150)
                     code = 0 if count else 1
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     code, error = -1, "zaman aşımı"
             elif name == "gallery-dl-rs":
                 code, error = await _gallery_rs(link, target, max_bytes, cookie_file, gallery_rs_path)
@@ -256,31 +259,31 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 try:
                     count, error = await asyncio.wait_for(download_gendownload(link, target, max_bytes), timeout=90)
                     code = 0 if count else 1
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     code, error = -1, "zaman aşımı"
             elif name == "vxtwitter":
                 try:
                     count, error = await asyncio.wait_for(download_vxtwitter(link.post_id or "", target, max_bytes), timeout=120)
                     code = 0 if count else 1
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     code, error = -1, "zaman aşımı"
             elif name == "indownio":
                 try:
                     count, error = await asyncio.wait_for(download_indownio(link, target, max_bytes), timeout=150)
                     code = 0 if count else 1
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     code, error = -1, "zaman aşımı"
             elif name in {"indown", "tiktokio", "rapidsave", "btch", "vette", "embed", "threads-page", "threadsdl"}:
                 try:
                     count, error = await asyncio.wait_for(download_web(name, link, target, max_bytes, cookie_file), timeout=90)
                     code = 0 if count else 1
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     code, error = -1, "zaman aşımı"
             else:
                 try:
                     count, error = await asyncio.wait_for(download_cobalt(link.url, target, max_bytes, cobalt_url, cobalt_key), timeout=150)
                     code = 0 if count else 1
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     code, error = -1, "zaman aşımı"
             files = media_files(target, max_bytes)
             if files and code == 0:
@@ -345,7 +348,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     if cache_eligible:
         cached = await asyncio.to_thread(MEDIA_CACHE.get, link.platform, link.url, bool(cookie_file))
         if cached:
-            copied = await asyncio.to_thread(MEDIA_CACHE.copy_to, cached, folder)
+            await asyncio.to_thread(MEDIA_CACHE.copy_to, cached, folder)
             files = media_files(folder, max_bytes)
             if files:
                 await asyncio.to_thread(METRICS.record_winner, link.platform, f"{cached.provider}-cache")
@@ -359,7 +362,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 pass
             cached = await asyncio.to_thread(MEDIA_CACHE.get, link.platform, link.url, bool(cookie_file))
             if cached:
-                copied = await asyncio.to_thread(MEDIA_CACHE.copy_to, cached, folder)
+                await asyncio.to_thread(MEDIA_CACHE.copy_to, cached, folder)
                 files = media_files(folder, max_bytes)
                 if files:
                     await asyncio.to_thread(METRICS.record_winner, link.platform, f"{cached.provider}-cache")
@@ -420,7 +423,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
             # hosted service cannot hold up the other routes indefinitely.
             try:
                 result = await asyncio.wait_for(attempt("threadsdl"), timeout=12)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 result = None
             if result is not None:
                 return await _success(result[0], result[1])
@@ -436,7 +439,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 # Cache hit: copy to caller folder (no quota/user-limit consumption).
                 cached = await asyncio.to_thread(HIGHLIGHTS.cache.get, hid)
                 if cached:
-                    copied = await asyncio.to_thread(HIGHLIGHTS.cache.copy_to, cached, folder)
+                    await asyncio.to_thread(HIGHLIGHTS.cache.copy_to, cached, folder)
                     files = media_files(folder, max_bytes)
                     if files:
                         await asyncio.to_thread(METRICS.record_winner, link.platform, "indownio-cache")
@@ -469,7 +472,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                         # Try quota-free indown.net first.
                         try:
                             result = await asyncio.wait_for(attempt("indown"), timeout=STORY_FIRST_TIMEOUT)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             result = None
                         if result is None:
                             # Fallback to indown.io with token bucket.
@@ -535,7 +538,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 first = "indown"
                 try:
                     result = await asyncio.wait_for(attempt(first), timeout=STORY_FIRST_TIMEOUT)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     result = None
                 if result is not None:
                     return await _success(result[0], result[1])

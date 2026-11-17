@@ -12,8 +12,8 @@ from html.parser import HTMLParser
 
 import httpx
 
-from .http import shared_client
 from .download import DownloadError
+from .http import shared_client
 from .links import PostLink
 
 
@@ -115,7 +115,7 @@ async def find_audio_source(track: SpotifyTrack) -> PostLink:
         proc.kill()
         await proc.communicate()
         raise
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.communicate()
         raise DownloadError("Ses kaynağı araması zaman aşımına uğradı.")

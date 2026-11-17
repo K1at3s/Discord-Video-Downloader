@@ -129,7 +129,7 @@ class HealthServerTests(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_unknown_path_is_404(self):
-        server = HealthServer(("127.0.0.1", 0), lambda: {})
+        server = HealthServer(("127.0.0.1", 0), dict)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
