@@ -88,9 +88,9 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 
 ## Yüksek etki / kullanılabilirlik iyileştirmeleri
 
-- [x] **Canlı gönderim ilerlemesi** — çok dosyalı genel ve Bluesky gönderilerinde durum mesajı `📤 1/N grup gönderiliyor…` / `✅ Gönderim tamamlandı` şeklinde güncelleniyor.
+- [x] **Canlı indirme/gönderim ilerlemesi** — genel medya akışında indirme sırasında `⏳ İndiriliyor… N dosya hazır/hazırlanıyor`, gönderim sırasında `📤 X/Y grup gönderiliyor…` ve bitişte `✅ N dosya gönderildi` durumları gösteriliyor; Bluesky çoklu batch gönderiminde de grup ilerlemesi var.
 - [x] **İndirme öncesi YouTube kalite tahmini** — `youtube.suggest_choice()` yükleme limitine göre istenen kaliteyi önceden sınırlar (örn. küçük limitte 1080p→720p/360p), gereksiz indirme ve 413 denemelerini azaltır.
-- [~] **İndirme→yükleme akışını birleştirme** — yükleme aşamasında ilerleme eklendi; tek sağlayıcı çalışırken dosya bazlı gerçek akış (indirme sürerken yükleme) için `download_media` API’sinin yeniden tasarlanması gerekiyor.
+- [~] **İndirme→yükleme akışını tam birleştirme** — indirme ve yükleme artık ayrı canlı durumlarla izleniyor; ancak sağlayıcı yarışı/hedge sırasında kazanan deneme tamamlanmadan dosya göndermek riskli olduğu için gerçek “indirilirken yükle” örtüşmesi henüz yok. Bunun için `download_media`/provider katmanının dosya-bazlı akış (yield) ve tek-kazanan garanti modeliyle yeniden tasarlanması gerekiyor.
 
 ## Sıradaki paketler
 

@@ -1213,51 +1213,114 @@ class MediaBot(discord.Client):
             error: DownloadError | None = None
             user_id = getattr(getattr(message, "author", None), "id", None)
             await set_status("⏳ Medya indiriliyor...")
+            limit_bytes = upload_limit(message, self.upload_bytes)
+            download_task = asyncio.create_task(
+                download_media(link, folder, limit_bytes, self.cookie_file,
+                               self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
+                               user_id=user_id)
+            )
+            suffixes = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+            sizes: dict[Path, tuple[int, float]] = {}
+            sent_files: list[Path] = []
+            batches_sent = 0
+            caption: str | None = None
+            chunks: list[str] = []
+
+            async def ensure_caption() -> None:
+                nonlocal caption, chunks
+                if caption is None:
+                    caption = await caption_or_none()
+                    chunks = display_chunks(caption)
+
             try:
-                media, _ = await download_media(link, folder, upload_limit(message, self.upload_bytes), self.cookie_file, self.cobalt_url, self.cobalt_key, self.gallery_rs_path, user_id=user_id)
-            except DownloadError as exc:
-                error = exc
-            except BaseException:
-                if not caption_task.done():
-                    caption_task.cancel()
-                await asyncio.gather(caption_task, return_exceptions=True)
-                raise
-            if not media:
-                caption = await caption_or_none()
-                preview = await self._reddit_message_preview(message, link) if link.platform == "reddit" else Preview()
-                if not preview.has_content:
-                    preview = await fetch_preview(link)
-                if caption or preview.has_content:
-                    for embed in preview_embeds(link, preview, caption):
-                        await self._reply(message, embed=embed, view=source_button(link.url))
-                    return "success", []
-                else:
-                    if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
-                        await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
+                last_count = -1
+                while not download_task.done():
+                    now = time.monotonic()
+                    ready = 0
+                    stabilizing = 0
+                    for path in folder.rglob("*"):
+                        if not path.is_file() or path.suffix.lower() not in suffixes:
+                            continue
+                        try:
+                            size = path.stat().st_size
+                        except OSError:
+                            continue
+                        if size <= 0 or size > limit_bytes:
+                            continue
+                        prev = sizes.get(path)
+                        if not prev or prev[0] != size:
+                            sizes[path] = (size, now)
+                            stabilizing += 1
+                            continue
+                        if now - prev[1] >= 1.0:
+                            ready += 1
+                        else:
+                            stabilizing += 1
+                    count = ready + stabilizing
+                    if status_message and count != last_count:
+                        if ready:
+                            await set_status(f"⏳ İndiriliyor… {ready} dosya hazır")
+                        elif stabilizing:
+                            await set_status(f"⏳ İndiriliyor… {stabilizing} dosya hazırlanıyor")
+                        last_count = count
+                    await asyncio.sleep(0.5)
+
+                try:
+                    media, _ = await download_task
+                except DownloadError as exc:
+                    error = exc
+                    media = []
+                except BaseException:
+                    if not caption_task.done():
+                        caption_task.cancel()
+                    await asyncio.gather(caption_task, return_exceptions=True)
+                    raise
+
+                if not media:
+                    caption = await caption_or_none()
+                    preview = await self._reddit_message_preview(message, link) if link.platform == "reddit" else Preview()
+                    if not preview.has_content:
+                        preview = await fetch_preview(link)
+                    if caption or preview.has_content:
+                        for embed in preview_embeds(link, preview, caption):
+                            await self._reply(message, embed=embed, view=source_button(link.url))
+                        return "success", []
                     else:
-                        await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
-                    return "failure", []
-            try:
-                caption = await caption_or_none()
-                chunks = display_chunks(caption)
+                        if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
+                            await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
+                        else:
+                            await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
+                        return "failure", []
+
+                await ensure_caption()
                 batches = list(attachment_batches(media))
                 total_batches = len(batches)
+                if status_message and total_batches:
+                    await set_status(f"📤 {len(media)} dosya, {total_batches} grup gönderilecek…")
                 for index, chunk in enumerate(batches):
+                    batches_sent += 1
                     if status_message and total_batches > 1:
-                        await set_status(f"📤 {index + 1}/{total_batches} grup gönderiliyor…")
+                        await set_status(f"📤 {batches_sent}/{total_batches} grup gönderiliyor…")
                     elif status_message:
                         await set_status("📤 Gönderiliyor…")
                     view = media_gallery_view(link.platform, chunk,
-                                              chunks[0] if index == 0 and chunks else None,
-                                              link.url, part=index + 1)
+                                              chunks[0] if batches_sent == 1 and chunks else None,
+                                              link.url, part=batches_sent)
                     await self._reply(message, files=chunk, view=view)
-                for index, text_chunk in enumerate(chunks[1:], 2):
+                    sent_files.extend(chunk)
+                for index, text_chunk in enumerate(chunks[1:], batches_sent + 1):
                     await self._reply(message, view=media_gallery_view(link.platform, [], text_chunk,
                                                                        link.url, part=index))
-                if status_message and total_batches > 1:
-                    await set_status("✅ Gönderim tamamlandı.")
+                if status_message and batches_sent:
+                    await set_status(f"✅ {len(sent_files)} dosya gönderildi.")
                 return "success", media
             finally:
+                if not download_task.done():
+                    download_task.cancel()
+                    try:
+                        await download_task
+                    except BaseException:
+                        pass
                 if not caption_task.done():
                     caption_task.cancel()
                 await asyncio.gather(caption_task, return_exceptions=True)
