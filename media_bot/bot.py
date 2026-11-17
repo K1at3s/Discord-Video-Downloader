@@ -1240,7 +1240,13 @@ class MediaBot(discord.Client):
             try:
                 caption = await caption_or_none()
                 chunks = display_chunks(caption)
-                for index, chunk in enumerate(attachment_batches(media)):
+                batches = list(attachment_batches(media))
+                total_batches = len(batches)
+                for index, chunk in enumerate(batches):
+                    if status_message and total_batches > 1:
+                        await set_status(f"📤 {index + 1}/{total_batches} grup gönderiliyor…")
+                    elif status_message:
+                        await set_status("📤 Gönderiliyor…")
                     view = media_gallery_view(link.platform, chunk,
                                               chunks[0] if index == 0 and chunks else None,
                                               link.url, part=index + 1)
@@ -1248,6 +1254,8 @@ class MediaBot(discord.Client):
                 for index, text_chunk in enumerate(chunks[1:], 2):
                     await self._reply(message, view=media_gallery_view(link.platform, [], text_chunk,
                                                                        link.url, part=index))
+                if status_message and total_batches > 1:
+                    await set_status("✅ Gönderim tamamlandı.")
                 return "success", media
             finally:
                 if not caption_task.done():
@@ -1310,7 +1318,14 @@ class MediaBot(discord.Client):
                 caption += "\n\nMedya indirilemedi."
             chunks = display_chunks(caption) or [""]
             batches = list(attachment_batches(media)) or [[]]
+            total = len([b for b in batches if b])
+            sent = 0
             for index, batch in enumerate(batches):
+                if batch and status_message and total > 1:
+                    sent += 1
+                    await set_status(f"📤 {sent}/{total} grup gönderiliyor…")
+                elif batch and status_message:
+                    await set_status("📤 Gönderiliyor…")
                 await self._reply(message, files=batch,
                                   view=media_gallery_view("bluesky", batch,
                                                           chunks[0] if index == 0 else None,
@@ -1321,6 +1336,8 @@ class MediaBot(discord.Client):
                 await self._reply(message, view=media_gallery_view("bluesky", [], chunk,
                                                                    link.url, part=index,
                                                                    show_missing_caption=False))
+            if status_message and total > 1:
+                await set_status("✅ Gönderim tamamlandı.")
             return "success", media
 
     async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:

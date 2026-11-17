@@ -86,9 +86,15 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **`!metrics` devre kesici durumu** — açık devreler ve kalan soğuma süreleri metrik özetine ekleniyor (`BREAKERS.snapshot()`).
 - [~] **Merkezi kota koordinasyonu** — highlight'lar için mevcut bucket/kullanıcı kotası korunuyor; ek global koordinasyon şimdilik gerekmiyor.
 
+## Yüksek etki / kullanılabilirlik iyileştirmeleri
+
+- [x] **Canlı gönderim ilerlemesi** — çok dosyalı genel ve Bluesky gönderilerinde durum mesajı `📤 1/N grup gönderiliyor…` / `✅ Gönderim tamamlandı` şeklinde güncelleniyor.
+- [x] **İndirme öncesi YouTube kalite tahmini** — `youtube.suggest_choice()` yükleme limitine göre istenen kaliteyi önceden sınırlar (örn. küçük limitte 1080p→720p/360p), gereksiz indirme ve 413 denemelerini azaltır.
+- [~] **İndirme→yükleme akışını birleştirme** — yükleme aşamasında ilerleme eklendi; tek sağlayıcı çalışırken dosya bazlı gerçek akış (indirme sürerken yükleme) için `download_media` API’sinin yeniden tasarlanması gerekiyor.
+
 ## Sıradaki paketler
 
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
 - [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
-- [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.
-- [ ] Çok dosyalı galerilerde canlı "X/Y dosya hazır" ilerleme göstergesi.
+- [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını tam birleştirme (provider çıktısını dosya bazlı akıtma).
+- [ ] Diğer platformlarda (Reddit/X kart akışları) canlı ilerleme ve ön boyut tahmini genişletmesi.

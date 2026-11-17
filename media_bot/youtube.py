@@ -28,6 +28,29 @@ LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
 
 
+def suggest_choice(choice: str, max_bytes: int) -> str:
+    """Cap requested video quality to what is likely to fit the upload limit.
+
+    This avoids wasting a full download attempt on a resolution that will almost
+    certainly exceed Discord's limit; the normal retry/shrink path remains as a
+    fallback for edge cases.
+    """
+    if choice == "mp3":
+        return choice
+    try:
+        height = int(choice)
+    except (TypeError, ValueError):
+        return choice
+    mb = 1024 * 1024
+    if height >= 1080 and max_bytes < 55 * mb:
+        height = 720
+    if height >= 720 and max_bytes < 12 * mb:
+        height = 360
+    if height >= 360 and max_bytes < 4 * mb:
+        height = 360
+    return str(height) if str(height) in CHOICES else choice
+
+
 async def fetch_youtube_meta(url: str) -> tuple[str | None, str | None]:
     """Return ``(title, channel)`` from the public oEmbed endpoint (no API key)."""
     try:
@@ -240,6 +263,10 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
                            cobalt_key: str | None) -> tuple[Path, str]:
     if choice not in CHOICES:
         raise ValueError("Geçersiz YouTube seçeneği")
+    effective = suggest_choice(choice, max_bytes)
+    if effective != choice:
+        LOG.info("YouTube kalite ön tahmini: %sp -> %sp (limit ~%d MB)", choice, effective, max_bytes // (1024 * 1024))
+    choice = effective
     providers = ["cobalt", "gendownload"] if cobalt_url else ["gendownload"]
     providers.append("yt-dlp")
     failures = []
