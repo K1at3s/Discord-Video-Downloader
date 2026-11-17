@@ -67,6 +67,17 @@ class CircuitBreaker:
                 state.probing = False
                 state.opened_until = self.clock()
 
+    def snapshot(self) -> dict:
+        """Open circuits and remaining cooldowns, for the health endpoint."""
+        now = self.clock()
+        with self._lock:
+            open_states = {
+                f"{provider}/{platform}": round(max(0.0, state.opened_until - now), 1)
+                for (provider, platform), state in self._states.items()
+                if state.opened_until > now
+            }
+        return {"open": open_states, "open_count": len(open_states)}
+
 
 def provider_fault(error: str | BaseException | None) -> bool:
     if error is None:

@@ -21,10 +21,14 @@ import httpx
 from dotenv import load_dotenv
 
 from .adult import AdultQuota, channel_is_nsfw, istanbul_day, reddit_adult_status
+from .backup import backup_databases, database_paths
 from .bluesky import download_bluesky_media, fetch_bluesky_post
 from .captions import display_chunks, fetch_caption
+from .circuit_breaker import BREAKERS
+from .cookiefile import cookie_report, cookie_warning
 from .cooldowns import Cooldowns
 from .download import DownloadError, download_media
+from .health import start_health_server
 from .highlight_state import HIGHLIGHTS, format_wait
 from .http import close_shared_clients
 from .indownio import is_rate_limited_message, resolve_indownio
@@ -70,6 +74,36 @@ def upload_limit(message: object | None, configured: int) -> int:
     if limit <= 0:
         limit = configured or UPLOAD_CEILING
     return max(1, min(limit, UPLOAD_CEILING))
+
+
+def _configure_logging() -> None:
+    """Console output plus a rotating file so long runs do not fill the disk."""
+    from logging.handlers import RotatingFileHandler
+
+    level_name = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    level = getattr(logging, level_name, logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    root.addHandler(console)
+
+    raw = os.getenv("LOG_FILE", "data/bot.log").strip()
+    if raw.lower() in {"", "0", "off", "false"}:
+        return
+    try:
+        path = Path(raw).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024,
+                                           backupCount=7, encoding="utf-8")
+    except OSError as exc:
+        logging.getLogger(__name__).warning("Log dosyası açılamadı: %s", exc)
+        return
+    file_handler.setFormatter(formatter)
+    root.addHandler(file_handler)
 
 
 def _prepare_temp_dir(root: Path) -> None:
@@ -291,14 +325,6 @@ class InteractionMessage:
         return await self.interaction.response.send_message(content=content or None, **kwargs)
 
 
-
-def _positive_int(name: str, default: int, maximum: int) -> int:
-    value = int(os.getenv(name, str(default)))
-    if not 1 <= value <= maximum:
-        raise ValueError(f"{name} 1 ile {maximum} arasında olmalı")
-    return value
-
-
 class MediaBot(discord.Client):
     def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None):
         intents = discord.Intents.default()
@@ -314,9 +340,15 @@ class MediaBot(discord.Client):
         self.cobalt_key = cobalt_key
         self.gallery_rs_path = gallery_rs_path
         self.owner_id = STATS_OWNER_ID
-        self.adult_quota = AdultQuota(database_path or Path(__file__).resolve().parent.parent / "data" / "bot.sqlite3")
+        self.database_path = database_path or Path(__file__).resolve().parent.parent / "data" / "bot.sqlite3"
+        self.concurrency = concurrency
+        self.started_at = time.time()
+        self.adult_quota = AdultQuota(self.database_path)
         self._health_task: asyncio.Task | None = None
         self._health_skips = 0
+        self._backup_task: asyncio.Task | None = None
+        self._health_server = None
+        self._cookie_checked = False
         try:
             cooldown = float(os.getenv("COMMAND_COOLDOWN_SECONDS", "2") or 2)
         except ValueError:
@@ -425,6 +457,16 @@ class MediaBot(discord.Client):
         self.tree = tree
 
     async def close(self) -> None:
+        for task in (self._health_task, self._backup_task):
+            if task and not task.done():
+                task.cancel()
+        if self._health_server is not None:
+            try:
+                self._health_server.shutdown()
+                self._health_server.server_close()
+            except OSError:
+                pass
+            self._health_server = None
         try:
             await close_shared_clients()
         finally:
@@ -432,9 +474,70 @@ class MediaBot(discord.Client):
 
     async def on_ready(self) -> None:
         LOG.info("Hazır: %s (%s)", self.user, self.user.id if self.user else "?")
+        if self._health_server is None:
+            self._health_server = start_health_server(
+                os.getenv("HEALTH_HOST", "127.0.0.1").strip() or "127.0.0.1",
+                _bounded_int("HEALTH_PORT", 0, 0, 65535),
+                self.health_payload,
+            )
+        if self._backup_task is None or self._backup_task.done():
+            if env_enabled("BACKUP_ENABLED") is not False:
+                self._backup_task = asyncio.create_task(self._backup_loop())
+        if not self._cookie_checked:
+            self._cookie_checked = True
+            await self._warn_cookie_expiry()
         if (HIGHLIGHTS.enabled and HIGHLIGHTS.health_check_enabled
                 and (self._health_task is None or self._health_task.done())):
             self._health_task = asyncio.create_task(self._highlight_health_loop())
+
+    def health_payload(self) -> dict:
+        """Machine-readable status for the local ``/healthz`` endpoint."""
+        cookies = cookie_report(self.cookie_file)
+        breakers = BREAKERS.snapshot()
+        try:
+            ready = self.is_ready()
+        except (AttributeError, RuntimeError):
+            ready = False
+        return {
+            "status": "ok" if ready else "starting",
+            "uptime_seconds": int(time.time() - self.started_at),
+            "user": str(self.user) if self.user else None,
+            "guilds": len(self.guilds),
+            "latency_ms": int(self.latency * 1000) if self.latency and self.latency == self.latency else 0,
+            "concurrency": self.concurrency,
+            "providers": breakers,
+            "cobalt": bool(self.cobalt_url),
+            "maintenance": MAINTENANCE.active,
+            "cookies": {key: cookies[key] for key in ("total", "expired", "expiring", "netscape")},
+        }
+
+    async def _warn_cookie_expiry(self) -> None:
+        warning = cookie_warning(self.cookie_file)
+        if not warning:
+            return
+        LOG.warning(warning)
+        try:
+            owner = await self.fetch_user(self.owner_id)
+            await owner.send(f"⚠️ {warning}")
+        except (discord.HTTPException, AttributeError):
+            LOG.warning("Çerez uyarısı sahibine gönderilemedi")
+
+    async def _backup_loop(self) -> None:
+        interval_hours = _bounded_int("BACKUP_INTERVAL_HOURS", 24, 1, 168)
+        keep = _bounded_int("BACKUP_KEEP", 7, 1, 90)
+        root = self.database_path.parent / "backups"
+        # Give startup work (migrations, log panel) a moment before touching disks.
+        await asyncio.sleep(60)
+        while not self.is_closed():
+            try:
+                await asyncio.to_thread(
+                    backup_databases, database_paths(self.database_path), root, keep,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOG.exception("Veritabanı yedeği alınamadı")
+            await asyncio.sleep(interval_hours * 3600)
 
     async def _highlight_health_loop(self) -> None:
         # Periodic health check: natgeo highlight 18023864549864045 (expects ~8 videos).
@@ -1230,7 +1333,7 @@ class MediaBot(discord.Client):
 
 def main() -> None:
     load_dotenv()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    _configure_logging()
     token = os.getenv("DISCORD_TOKEN", "").strip()
     if not token:
         raise SystemExit("DISCORD_TOKEN .env dosyasında tanımlanmalı.")

@@ -56,6 +56,26 @@ Copy-Item .env.example .env
 
 Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip `python -m media_bot.bot` çalıştırın. Botun çevrimiçi kalması için çalıştığı makine açık kalmalıdır. Windows'ta indirme/ffmpeg gecikmesini azaltmak için yönetici PowerShell'de `.\scripts\defender-exclusions.ps1` çalıştırabilirsiniz (proje, `data`, `.venv`, `vendor` ve python/ffmpeg süreçleri için Defender istisnası ekler).
 
+## 7/24 çalıştırma ve izleme
+
+Botu oturum açıldığında otomatik başlatmak ve çökünce yeniden denemek için:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-autostart.ps1
+# Kaldırmak için:
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-autostart.ps1
+```
+
+Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex ile ikinci bir bot kopyasının açılmasını engeller, hata kodunda 5–60 sn artan bekleme ile yeniden dener ve olayları `data/autostart.log` dosyasına yazar. Elle `start-bot.ps1` çalıştırıyorsanız önce görevi durdurun.
+
+**Günlük dosyası:** `data/bot.log` varsayılan olarak 10 MB'ta döner ve 7 eski dosya tutar (`LOG_FILE`, `LOG_LEVEL`).
+
+**Sağlık uç noktası:** `HEALTH_PORT` sıfırdan büyükse `http://127.0.0.1:<port>/healthz` JSON döner: durum, uptime, sunucu sayısı, gecikme, açık devre kesiciler, Cobalt yapılandırması, bakım modu ve çerez sayıları. Varsayılan kapalıdır; dışarıya açmadan önce güvenlik duvarını ve ters vekili düşünün.
+
+**Yedekler:** Bot her `BACKUP_INTERVAL_HOURS` saatte (varsayılan 24) `bot.sqlite3`, `provider_metrics.sqlite3` ve `request_log.sqlite3` dosyalarını `data/backups/<tarih>/` altına `sqlite3.Connection.backup` ile kopyalar; `BACKUP_KEEP` kadar klasör saklar. Geri yüklemek için botu durdurup ilgili dosyayı `data/` altına kopyalayın.
+
+**Çerez uyarısı:** Açılışta `COOKIE_FILE` Netscape biçiminde değilse, süresi dolmuşsa veya 3 gün içinde dolacaksa bot sahibine DM ve günlük uyarısı gönderir.
+
 ## `.env` ayarları
 
 | Değişken | Varsayılan | Görevi |
@@ -88,6 +108,13 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `MAINTENANCE_MESSAGE` | *(varsayılan metin)* | Bakım açıkken kullanıcılara gösterilecek özel mesaj |
 | `REQUEST_LOG_RETENTION_DAYS` | `30` | İşlem kayıtlarının saklanma süresi (gün) |
 | `REQUEST_LOG_STORE_URL` | `1` | `0` ise işlem kayıtlarında URL saklanmaz (platform/sonuç yine tutulur) |
+| `LOG_FILE` | `data/bot.log` | Dönen günlük dosyası (10 MB × 7); boş/`0` ise yalnızca konsol |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `HEALTH_HOST` | `127.0.0.1` | `/healthz` uç noktasının dinleyeceği adres |
+| `HEALTH_PORT` | `0` | Sağlık uç noktası portu; `0` kapalı |
+| `BACKUP_ENABLED` | `1` | Günlük SQLite yedeği (`data/backups/`) açık/kapalı |
+| `BACKUP_INTERVAL_HOURS` | `24` | Yedek aralığı (saat) |
+| `BACKUP_KEEP` | `7` | Saklanan yedek klasörü sayısı |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
 
@@ -146,7 +173,12 @@ Reddit'in +18 durumu doğrulanamazsa bağlantı işlenmez. Bu denetim **Reddit'e
 | `media_bot/request_log.py` | Sunucu/kullanıcı/link bazlı işlem kayıtları ve başarı yüzdesi özeti |
 | `media_bot/http.py`, `sqlite_util.py` | Paylaşılan HTTP bağlantı havuzu ve WAL ayarlı SQLite bağlantıları |
 | `media_bot/job_slots.py` | Toplam ve kullanıcı başına eşzamanlılık sınırı |
+| `media_bot/http.py`, `sqlite_util.py` | Paylaşılan HTTP bağlantı havuzu ve WAL ayarlı SQLite bağlantıları |
+| `media_bot/health.py` | `/healthz` için stdlib HTTP sunucusu |
+| `media_bot/backup.py` | Günlük SQLite yedekleri ve eski klasörlerin temizliği |
+| `media_bot/cookiefile.py` | Çerez biçimi/son kullanma raporu ve Netscape kontrolü |
 | `scripts/defender-exclusions.ps1` | Windows Defender istisnaları (yönetici olarak çalıştırılır) |
+| `scripts/install-autostart.ps1`, `run-bot-loop.ps1` | Açılışta otomatik başlatma ve çökme sonrası yeniden deneme |
 | `tests/` | Birim ve akış testleri |
 
 Firefox eklentisi ayrı bir yerel çalışma klasörüdür; `.gitignore` içinde tutulur ve bu repoya dahil edilmez.

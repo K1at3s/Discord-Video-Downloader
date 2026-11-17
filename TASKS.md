@@ -48,11 +48,32 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
   ilk istek + 30 dk sonraki tekrar (önbellek etkisi).
 - Değişiklik başına ayrı commit; testler: `python -m unittest discover -s tests -q`.
 
-## Sonraki Discord işleri (hız listesinden bağımsız)
+## Operasyon paketi — 17 Kasım 2026
 
-- Sunucu bazlı ayarlar (`/ayar`): otomatik thread, varsayılan kalite, NSFW politikası.
-- Sağlık uç noktası (`/healthz`) ve basit uptime takibi.
-- Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
-- i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
-- GitHub Actions: test + ruff.
-- Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.
+- [x] **Dönen günlük dosyası** — `LOG_FILE` (varsayılan `data/bot.log`), `LOG_LEVEL`;
+  10 MB × 7 dosya. Boş/`0` değeri yalnızca konsolu bırakır.
+- [x] **Sağlık uç noktası** — `media_bot/health.py`, stdlib `http.server`;
+  `HEALTH_HOST`/`HEALTH_PORT` (varsayılan kapalı). `/healthz` durum, uptime,
+  sunucu sayısı, gecikme, açık devre kesiciler, Cobalt, bakım ve çerez özeti döner.
+- [x] **Günlük SQLite yedeği** — `media_bot/backup.py`,
+  `sqlite3.Connection.backup` ile `data/backups/<tarih>/`; `BACKUP_KEEP`
+  (varsayılan 7) eski klasör silinir. `BACKUP_ENABLED=0` kapatır.
+- [x] **Çerez izleme** — `cookie_report`/`cookie_warning`; süresi dolmuş, 3 gün
+  içinde dolacak veya Netscape olmayan dosya için sahibine DM + günlük uyarısı.
+- [x] **Otomatik başlatma** — `scripts/install-autostart.ps1` oturum açılışında
+  `run-bot-loop.ps1` görevini kurar; mutex ikinci kopyayı engeller, çökmede
+  5–60 sn artan beklemeyle yeniden dener, `data/autostart.log` tutar.
+- [x] **Testler** — `tests/test_ops.py` (15 test): yedek/geri yükleme, saklama
+  sınırı, çerez raporu, devre kesici anlık görüntüsü, `/healthz` ve bot payload'ı.
+
+## Sıradaki paketler
+
+- [ ] **Discord UX**: sunucu bazlı `/ayar` (otomatik thread, varsayılan YouTube
+  kalitesi), thread yönlendirmesi, çok dosyalı ilerleme göstergesi.
+- [ ] **Sağlayıcı dayanıklılığı**: YouTube bot-check algılama/mesajı, `!metrics`
+  içinde devre kesici durumu, gerekirse merkezi kota koordinasyonu.
+- [ ] **CI + benchmark**: GitHub Actions (ruff + testler), sabit link listesiyle
+  `scripts/benchmark.py`.
+- [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
+- [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
+- [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.
