@@ -997,13 +997,20 @@ class MediaBot(discord.Client):
                     detail = ""
                     files: list[Path] = []
                     pending_target = None
+                    precomputed_bytes: int | None = None
                     started = time.monotonic()
                     try:
                         result = await self._handle_link(message, link, status_message=status_message)
                         if isinstance(result, tuple):
                             outcome, files = result[0], result[1]
                             if len(result) > 2:
-                                pending_target = result[2]
+                                third = result[2]
+                                if isinstance(third, int) and not hasattr(third, "request_id"):
+                                    precomputed_bytes = third
+                                elif third is not None:
+                                    pending_target = third
+                            if len(result) > 3 and isinstance(result[3], int):
+                                precomputed_bytes = result[3]
                         elif result in {"success", "failure", "pending", "skipped"}:
                             outcome = result
                         elif result is None:
@@ -1043,7 +1050,10 @@ class MediaBot(discord.Client):
                         detail = "exception"
                     finally:
                         file_count = len(files)
-                        total_bytes = sum(p.stat().st_size for p in files if p.is_file())
+                        if precomputed_bytes is not None:
+                            total_bytes = precomputed_bytes
+                        else:
+                            total_bytes = sum(p.stat().st_size for p in files if p.is_file())
                         record_id = REQUESTS.record(
                             guild_id=getattr(message.guild, "id", None),
                             guild_name=getattr(message.guild, "name", None),
@@ -1284,13 +1294,13 @@ class MediaBot(discord.Client):
                     if caption or preview.has_content:
                         for embed in preview_embeds(link, preview, caption):
                             await self._reply(message, embed=embed, view=source_button(link.url))
-                        return "success", []
+                        return "success", [], None, 0
                     else:
                         if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
                             await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=source_button(link.url))
                         else:
                             await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
-                        return "failure", []
+                        return "failure", [], None, 0
 
                 await ensure_caption()
                 batches = list(attachment_batches(media))
@@ -1313,7 +1323,8 @@ class MediaBot(discord.Client):
                                                                        link.url, part=index))
                 if status_message and batches_sent:
                     await set_status(f"✅ {len(sent_files)} dosya gönderildi.")
-                return "success", media
+                total_bytes = sum(p.stat().st_size for p in media if p.is_file())
+                return "success", media, None, total_bytes
             finally:
                 if not download_task.done():
                     download_task.cancel()
