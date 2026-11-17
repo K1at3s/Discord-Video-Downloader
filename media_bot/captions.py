@@ -73,7 +73,11 @@ async def _fetch(link: PostLink, route: str, cookie_file: Path | None = None) ->
             response = await client.post("https://www.tikwm.com/api/", data={"url": link.url, "hd": "1"})
             response.raise_for_status()
             data = response.json()
-            return _clean((data.get("data") or {}).get("title")) if data.get("code") == 0 else None
+            if data.get("code") != 0:
+                return None
+            info = data.get("data") or {}
+            # tikwm usually provides the caption in "title"; some responses use "desc".
+            return _clean(info.get("title") or info.get("desc"))
         if route == "reddit":
             post_id = _reddit_id(link.url)
             if not post_id:
@@ -144,7 +148,7 @@ async def fetch_caption(link: PostLink, cookie_file: Path | None = None) -> str 
     routes = {
         "instagram": ["page", "gendownload"],
         "facebook": ["page", "gendownload"],
-        "tiktok": ["tikwm", "gendownload"],
+        "tiktok": ["tikwm", "gendownload", "page"],
         "reddit": ["reddit_rss", "reddit"],
         "youtube": ["gendownload", "youtube"],
         "threads": ["page"],
