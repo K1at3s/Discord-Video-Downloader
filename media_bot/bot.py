@@ -1210,9 +1210,14 @@ class MediaBot(discord.Client):
             return await self._handle_x(message, link, status_message=status_message)
         caption_task = asyncio.create_task(fetch_caption(link, self.cookie_file))
 
-        async def caption_or_none() -> str | None:
+        async def caption_or_none(timeout: float | None = None) -> str | None:
             try:
-                return await caption_task
+                if timeout is None:
+                    return await caption_task
+                return await asyncio.wait_for(asyncio.shield(caption_task), timeout=timeout)
+            except TimeoutError:
+                LOG.info("Caption fetch timed out for %s; sending without waiting longer", link.platform)
+                return None
             except Exception:
                 LOG.exception("Caption unavailable for %s", link.platform)
                 return None
@@ -1236,10 +1241,10 @@ class MediaBot(discord.Client):
             caption: str | None = None
             chunks: list[str] = []
 
-            async def ensure_caption() -> None:
+            async def ensure_caption(timeout: float | None = 2.0) -> None:
                 nonlocal caption, chunks
                 if caption is None:
-                    caption = await caption_or_none()
+                    caption = await caption_or_none(timeout=timeout)
                     chunks = display_chunks(caption)
 
             try:
