@@ -15,7 +15,7 @@ from pathlib import Path
 from .sqlite_util import open_db
 
 LOG = logging.getLogger(__name__)
-OUTCOMES = {"success", "fault", "no_media", "private", "error", "unavailable", "skipped", "cancelled", "quota"}
+OUTCOMES = {"success", "fault", "no_media", "private", "error", "unavailable", "skipped", "cancelled", "quota", "bot_check"}
 RETENTION_SECONDS = 14 * 86400
 
 

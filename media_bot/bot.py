@@ -651,6 +651,11 @@ class MediaBot(discord.Client):
             "",
             METRICS.format_text(168, limit=8),
         ]
+        breakers = BREAKERS.snapshot()
+        if breakers.get("open"):
+            parts.append("")
+            items = ", ".join(f"{name} (~{sec}s)" for name, sec in list(breakers["open"].items())[:8])
+            parts.append(f"Devre kesici açık: {items}")
         if HIGHLIGHTS.enabled and HIGHLIGHTS.bucket:
             remaining = HIGHLIGHTS.bucket.remaining()
             wait = HIGHLIGHTS.bucket.wait_seconds()

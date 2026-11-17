@@ -80,9 +80,14 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **Benchmark aracı** — `scripts/benchmark.py`: `links.txt` dosyasındaki bağlantıları `download_media` ile ölçer, sağlayıcı/platform bazlı p50/p95 raporu üretir (`rapor.json`). Discord'a bağlanma gerekmez.
 - [x] **Testler** — 252 test geçiyor; CI'de her push'ta çalışır.
 
+## Sağlayıcı dayanıklılığı — tamamlandı
+
+- [x] **YouTube bot-check algılama** — `download.py` içinde "Sign in to confirm you're not a bot" vb. hatalar tespit edilince kullanıcıya güncel `COOKIE_FILE` (Netscape, oturum açık) kullanması öneriliyor; metriklerde `bot_check` sonucu kaydediliyor.
+- [x] **`!metrics` devre kesici durumu** — açık devreler ve kalan soğuma süreleri metrik özetine ekleniyor (`BREAKERS.snapshot()`).
+- [~] **Merkezi kota koordinasyonu** — highlight'lar için mevcut bucket/kullanıcı kotası korunuyor; ek global koordinasyon şimdilik gerekmiyor.
+
 ## Sıradaki paketler
 
-- [ ] **Sağlayıcı dayanıklılığı**: YouTube bot-check algılama/mesajı, `!metrics` içinde devre kesici durumu, gerekirse merkezi kota koordinasyonu.
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
 - [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
 - [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.

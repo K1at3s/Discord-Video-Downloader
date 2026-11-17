@@ -39,12 +39,26 @@ PROCESS_TIMEOUT = 150
 STORY_FIRST_TIMEOUT = 18
 NO_MEDIA_RESULTS = {"no usable media", "no uploadable media"}
 PRIVATE_HINTS = ("login", "private", "authrequired")
+BOT_CHECK_HINTS = (
+    "sign in to confirm",
+    "not a bot",
+    "confirm you’re not a bot",
+    "confirm you're not a bot",
+    "use --cookies-from-browser",
+    "use --cookies",
+)
 
 
 def looks_private(error: str) -> bool:
     """Providers say "login required" / "private" when the account is not public."""
     lowered = error.lower()
     return any(hint in lowered for hint in PRIVATE_HINTS)
+
+
+def looks_bot_check(error: str) -> bool:
+    """YouTube (and some sites) ask to prove the client is not automated."""
+    text = error.casefold()
+    return any(hint in text for hint in BOT_CHECK_HINTS)
 
 
 class DownloadError(Exception):
@@ -227,8 +241,9 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     oversize = False
     private = False
     rate_limited = False
+    bot_check = False
     async def attempt(name: str) -> tuple[list[Path], str] | None:
-        nonlocal oversize, private, rate_limited
+        nonlocal oversize, private, rate_limited, bot_check
         started = time.monotonic()
         if not BREAKERS.allow(name, link.platform):
             LOG.info("Skipping %s for %s during provider cooldown", name, link.platform)
@@ -307,7 +322,9 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 LOG.warning("%s failed for %s (exit %s): %s", name, link.platform, code, error)
                 private = private or looks_private(error)
                 rate_limited = rate_limited or "hourly request limit" in error.lower()
+                bot_check = bot_check or bool(error and looks_bot_check(error))
             outcome = ("quota" if is_rate_limited_message(error or "") else
+                       "bot_check" if error and looks_bot_check(error) else
                        "fault" if fault else "private" if error and looks_private(error) else
                        "no_media" if not error or error.strip().lower() in NO_MEDIA_RESULTS else "error")
             await asyncio.to_thread(METRICS.record, link.platform, name, outcome, int((time.monotonic() - started) * 1000))
@@ -525,6 +542,11 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                         return await _success(result[0], result[1])
                     if oversize:
                         raise DownloadError("Medya Discord yükleme sınırını aşıyor.")
+                    if bot_check:
+                        raise DownloadError(
+                            "Sağlayıcılar oturum/bot doğrulaması istedi. Güncel COOKIE_FILE deneyin. "
+                            f"(denenen: {', '.join(failures)})"
+                        )
                     if private:
                         raise DownloadError("Bu hesap gizli olduğu için medya indirilemedi. Gizli hesaplar yalnızca oturum açılmış bir çerez dosyasıyla (COOKIE_FILE) indirilebilir.")
                     if rate_limited and link.platform == "instagram":
@@ -548,6 +570,12 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
             return await _success(result[0], result[1])
         if oversize:
             raise DownloadError("Medya Discord yükleme sınırını aşıyor.")
+        if bot_check and link.platform == "youtube":
+            raise DownloadError(
+                "YouTube bu isteği otomatik trafik olarak işaretledi (bot doğrulaması). "
+                "Tarayıcıda oturum açmış güncel bir Netscape cookie dosyasını COOKIE_FILE "
+                "olarak ayarlayıp botu yeniden başlatın."
+            )
         if private:
             raise DownloadError("Bu hesap gizli veya oturum gerektiriyor; medya indirilemedi. Erişim hakkınız varsa COOKIE_FILE ayarlayın.")
         if rate_limited and link.platform == "instagram":
@@ -560,6 +588,10 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
             # valid session cookie is configured, so no provider can see the post.
             raise DownloadError("Threads paylaşım bağlantısı oturum olmadan açılamıyor. COOKIE_FILE ayarlayın veya gönderiyi tarayıcıda açıp /@kullanıcı/post/... bağlantısını paylaşın.")
         detail = ", ".join(failures[:6])
+        if bot_check:
+            raise DownloadError(
+                f"Sağlayıcılar oturum/bot doğrulaması istedi. Güncel COOKIE_FILE deneyin. (denenen: {detail})"
+            )
         if failures:
             raise DownloadError(f"Bu gönderiden medya alınamadı. Gönderi kaldırılmış, özel/giriş gerektiriyor ya da sağlayıcılar geçici olarak yanıt vermiyor olabilir. (denenen: {detail})")
         raise DownloadError("Bu gönderiden medya alınamadı. Gönderi kaldırılmış, özel/giriş gerektiriyor ya da sağlayıcılar geçici olarak yanıt vermiyor olabilir.")
