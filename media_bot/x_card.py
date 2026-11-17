@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from .http import shared_client
 
 LOG = logging.getLogger(__name__)
 def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -150,7 +151,7 @@ async def fetch_post(post_id: str, *, enrich_quotes: bool = True) -> dict | None
     sources = (("X Syndication", "https://cdn.syndication.twimg.com/tweet-result"),
                ("VxTwitter", f"https://api.vxtwitter.com/i/status/{post_id}"),
                ("FxTwitter", f"https://api.fxtwitter.com/2/status/{post_id}"))
-    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+    async with shared_client(timeout=10, follow_redirects=False) as client:
         for name, url in sources:
             try:
                 params = {"id": post_id, "token": "0", "lang": "tr"} if name == "X Syndication" else None
@@ -188,7 +189,7 @@ async def _avatar(url: str | None) -> Image.Image | None:
     if not url or not re.fullmatch(r"https://pbs\.twimg\.com/[^\s]+", url):
         return None
     try:
-        async with httpx.AsyncClient(timeout=8, follow_redirects=False) as client:
+        async with shared_client(timeout=8, follow_redirects=False) as client:
             response = await client.get(url)
             response.raise_for_status()
             if len(response.content) > 2_000_000:

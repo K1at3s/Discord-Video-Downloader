@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from .http import shared_client
 from .links import PostLink, parse_link
 
 LOG = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ async def resolve_threads_link(link: PostLink, cookie_file: Path | None = None,
 
     if client is not None:
         return await inspect(client)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=3), follow_redirects=False,
+    async with shared_client(timeout=httpx.Timeout(8, connect=3), follow_redirects=False,
                                  trust_env=False, headers=NAV_HEADERS,
                                  cookies=_threads_cookies(cookie_file)) as http:
         return await inspect(http)

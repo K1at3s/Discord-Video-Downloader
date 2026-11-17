@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
+from .http import shared_client
 from .direct_providers import _stream, _suffix, allowed_media_url
 from .links import PostLink
 from .limits import MAX_MEDIA_ITEMS
@@ -269,7 +270,7 @@ async def download_web(name: str, link: PostLink, folder: Path, max_bytes: int,
     try:
         # Some networks drop roughly half of the TLS handshakes to these hosts,
         # so a fresh connection usually succeeds where the first one failed.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=5), follow_redirects=False,
+        async with shared_client(timeout=httpx.Timeout(20, connect=5), follow_redirects=False,
                                      trust_env=False, headers={"User-Agent": AGENT},
                                      cookies=_threads_cookies(cookie_file) if name == "threads-page" else None,
                                      transport=httpx.AsyncHTTPTransport(retries=3)) as client:

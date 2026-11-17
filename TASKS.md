@@ -1,76 +1,44 @@
 # Görevler
 
-## Yarın: hızlandırma (etkiye göre sıralı)
+## Hızlandırma — 17 Kasım 2026
 
-Aşağıdaki liste "önce ölç, sonra değiştir" mantığıyla ilerler. Her maddeden önce
-`!metrics 24s` çıktısı ve bir örnek isteğin uçtan uca süresi not edilsin; değişiklik
-sonrası aynı ölçüm tekrarlansın.
+Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
+(`python -m unittest discover -s tests -q`).
 
-1. **Windows Defender istisnaları** (kod yok, en yüksek etki)
-   Proje klasörü, `data/`, `.venv/` ve yt-dlp/ffmpeg çalışma klasörlerini gerçek
-   zamanlı taramadan muaf tut. İndirme ve ffmpeg yeniden kodlama sırasında oluşan
-   gecikmenin büyük kısmı buradan geliyor. Ölçüm: aynı 720p videonun indirme+serme
-   süresi önce/sonra.
-
-2. **Paylaşılan `httpx.AsyncClient`** (`media_bot/http.py`)
-   Şu anda 20'den fazla yerde istek başına yeni client açılıyor; her biri yeni TLS
-   el sıkışması demek. Sağlayıcı bazlı timeout'ları `client.get(..., timeout=...)`
-   ile koru, uygulama kapanışında tek yerde `aclose()` çağır. Hedef: istek başına
-   50–200 ms ve gereksiz bağlantı yükü.
-
-3. **Sağlayıcıları ölçülen hıza göre sırala**
-   `provider_metrics` zaten `p50_ms`/`p95_ms` ve kazanan sayısını tutuyor.
-   `download.py` içindeki sabit sıra yerine: yeterli örnek varsa (örn. son 24 saatte
-   ≥ 5 başarı) `wins` ve `p95`'e göre sırala; kota geçmişi olan sağlayıcıyı sona at;
-   örnek yoksa mevcut sabit sıraya dön. Test: sıralama fonksiyonu için birim testi.
-
-4. **Uyarlanabilir hedge süresi**
-   `provider_memory.hedge_seconds()` şu an sabit `PROVIDER_HEDGE_SECONDS` (8 sn).
-   Önce tercih edilen sağlayıcının `p95` değerini kullan (3–20 sn arası sınırla),
-   env değeri verilmişse onu üstün tut. Yavaş sağlayıcıda gereksiz bekleme, hızlıda
-   gereksiz ikinci indirme önlenir.
-
-5. **Story/highlight zaman aşımını düşür**
-   `download.py` içinde story ve highlight yollarında ilk sağlayıcı 90 sn
-   bekleyebiliyor; tek küçük dosya için bu, kuyruğu kilitliyor. İlk denemeyi
-   15–20 sn'ye indir, sonra hedge'e geç. Hata mesajı aynı kalsın.
-
-6. **Bir mesajdaki linkleri paralel işle**
-   `MAX_LINKS_PER_MESSAGE` kadar link şu an sırayla işleniyor. İndirmeleri paralel
-   başlat (mevcut `job_slots` sınırı içinde), yüklemeleri tamamlandıkça sırayla yap.
-   Discord rate limit'e dikkat: yükleme tarafı seri kalsın.
-
-7. **yt-dlp bayrakları ve boyuta göre format seçimi**
-   `--concurrent-fragments 4`, `--no-part`, `--retries 3`, `--fragment-retries 3`.
-   Format seçiminde `-S res:…,ext:mp4` ile hedef yükleme limitine en yakın
-   çözünürlüğü seç; gereksiz yüksek çözünürlük indirip sonra küçültme.
-
-8. **413'te otomatik kalite düşürme**
-   Discord "Payload Too Large" döndüğünde aynı dosyayı bir alt çözünürlükte
-   (1080 → 720 → 480) yeniden kodla ve tekrar gönder. Reddedilen boyutu kısa süreli
-   bellekte tut, aynı istekte ikinci kez denemesin. `video_fit` zaten var; eksik olan
-   retry akışı ve boyut ipucu.
-
-9. **Teslim önbelleği süresini uzat**
-   `MEDIA_CACHE` TTL'i 20 dk; aynı gönderi yarım saat sonra tekrar indiriliyor.
-   Platforma göre 6–24 saat TTL kullan (YouTube/Instagram gönderileri değişmez).
-   Not: Discord botları mesaj forward edemez; kazanç, dosyayı yerelden yeniden
-   yükleyip indirmeyi tamamen atlamak.
-
-10. **İndirme/yükleme örtüşmesi**
-    Çok dosyalı gönderilerde ilk dosya inince yüklemeyi başlat, kalan dosyalar
-    arka planda inerken ilk dosya Discord'a gönderilsin. 6. maddeyle birlikte
-    uygulanırsa toplam süre en çok burada düşer.
-
-11. **SQLite WAL ve busy_timeout**
-    `provider_metrics`, `request_log`, `adult` kotası ve highlight state için
-    `PRAGMA journal_mode=WAL` + `busy_timeout=5000`. Eşzamanlı yazmalarda kilit
-    beklemesini azaltır; tek satırlık değişiklik.
-
-12. **Linux + uvloop (opsiyonel, dağıtım)**
-    Botu Linux'ta çalıştırıp `uvloop` kullanmak, paralel indirme ve ffmpeg
-    alt süreçlerinde Windows'a göre belirgin kazanç sağlar. Docker paketleme
-    maddesiyle birlikte değerlendirilebilir.
+- [x] **Windows Defender istisnaları** — `scripts/defender-exclusions.ps1`
+  proje, `data`, `.venv`, `vendor` klasörlerini ve python/ffmpeg/ffprobe/bun
+  süreçlerini muaf tutuyor. Geçici indirmeler artık `data/tmp` altında; 24 saatten
+  eski klasörler açılışta siliniyor.
+- [x] **Paylaşılan `httpx.AsyncClient`** — `media_bot/http.py`; aynı timeout/header/
+  cookie/transport imzası için bağlantı havuzu yeniden kullanılıyor, bot kapanışında
+  `close_shared_clients()` çağrılıyor. 19 istek başına client oluşturma kaldırıldı.
+- [x] **Ölçülen hıza göre sağlayıcı sıralaması** — `ProviderMetrics.p95_ms` ve
+  `successful_latencies`; `provider_memory.ranked()` son 24 saatte ≥4 başarılı
+  denemesi olan sağlayıcıları p95'e göre öne alıyor, veri yoksa sabit sıra korunuyor.
+- [x] **Uyarlanabilir hedge** — `hedge_seconds()` boşsa tercih edilen sağlayıcının
+  p95'inin ~1.2 katını 3–20 sn aralığına sıkıştırıyor; `PROVIDER_HEDGE_SECONDS`
+  verilirse sabit değer kullanılıyor.
+- [x] **Story/highlight ilk deneme zaman aşımı** — 90 sn → 18 sn
+  (`STORY_FIRST_TIMEOUT`); ardından normal yarışa düşüyor.
+- [x] **Mesajdaki linkleri paralel işleme** — tek mesajda birden çok link varsa
+  ikisi aynı anda indiriliyor, hazır olan hemen yükleniyor. Tek linkte davranış
+  aynı; durum mesajı yarışını önlemek için paralel modda statik metin kullanılıyor.
+- [x] **yt-dlp bayrakları** — `--concurrent-fragments 4`, `--no-part`,
+  `--retries 3`, `--fragment-retries 3` (genel indirici ve YouTube). YouTube video
+  seçiminde 1080 → 720 → 480 → 360 kalite merdiveni eklendi; yalnızca boyut/format
+  kaynaklı başarısızlıkta bir alt kalite deneniyor.
+- [x] **413 otomatik kalite düşürme** — Discord yüklemeyi reddederse video 480p ve
+  daha düşük bit hızıyla yeniden kodlanıp bir kez tekrar gönderiliyor
+  (`fit_video(force=True)`).
+- [x] **Teslim önbelleği süresi** — `MEDIA_CACHE_TTL_MINUTES` varsayılanı 20 → 360
+  dakika (en fazla 7 gün). Aynı gönderi tekrar istendiğinde indirme atlanıyor.
+- [x] **SQLite WAL** — `media_bot/sqlite_util.open_db()` tüm store'larda
+  `journal_mode=WAL`, `busy_timeout=5000`, `synchronous=NORMAL` uyguluyor.
+- [x] **Linux/uvloop (opsiyonel)** — `requirements.txt` içine Windows dışı için
+  `uvloop` eklendi; `main()` mevcutsa politikayı kuruyor.
+- [~] **İndirme/yükleme örtüşmesi** — çok linkli mesajlarda tamamlandı. Tek linkin
+  çok dosyalı galerisinde yükleme hâlâ tüm indirmeler bitince başlıyor; bunun için
+  `download_media`'nın dosya bazlı akış döndürmesi gerekiyor.
 
 ## Ölçüm kontrol listesi
 
@@ -87,3 +55,4 @@ sonrası aynı ölçüm tekrarlansın.
 - Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
 - i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
 - GitHub Actions: test + ruff.
+- Tek linkte çok dosyalı galeri için indirme/yükleme akışını birleştirme.

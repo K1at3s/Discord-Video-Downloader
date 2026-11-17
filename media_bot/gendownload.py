@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .http import shared_client
 from .direct_providers import _stream, allowed_media_url
 from .links import PostLink
 from .limits import MAX_MEDIA_ITEMS
@@ -40,7 +41,7 @@ def media_options(data: dict, max_bytes: int) -> tuple[list[tuple[str, str]], li
 async def download_gendownload(link: PostLink, folder: Path, max_bytes: int) -> tuple[int, str]:
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
+            async with shared_client(timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
                                          trust_env=False, transport=httpx.AsyncHTTPTransport(retries=3)) as client:
                 response = await client.post("https://gendownload.com/api/extract", json={"url": link.url})
                 response.raise_for_status()

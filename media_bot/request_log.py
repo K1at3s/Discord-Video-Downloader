@@ -14,6 +14,8 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .sqlite_util import open_db
+
 LOG = logging.getLogger(__name__)
 OUTCOMES = {"success", "failure", "pending", "skipped"}
 RETENTION_SECONDS = 30 * 86400
@@ -141,7 +143,7 @@ class RequestLog:
         if retention_days is not None:
             self.retention_seconds = max(1, int(retention_days)) * 86400
         path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, closing(sqlite3.connect(path, timeout=5)) as db, db:
+        with self._lock, closing(open_db(path, timeout=5)) as db, db:
             db.execute(
                 "CREATE TABLE IF NOT EXISTS request_log ("
                 "at REAL NOT NULL, guild_id INTEGER, guild_name TEXT, "
@@ -199,7 +201,7 @@ class RequestLog:
         if self.path is None:
             return None
         try:
-            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db, db:
                 self._cleanup(db, time.time())
                 cursor = db.execute(
                     "INSERT INTO request_log "
@@ -262,7 +264,7 @@ class RequestLog:
         if not fields:
             return False
         try:
-            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db, db:
                 cursor = db.execute(
                     f"UPDATE request_log SET {', '.join(fields)} WHERE rowid = ?",
                     (*params, int(record_id)),
@@ -284,7 +286,7 @@ class RequestLog:
             clauses.append("at >= ?")
             params.append(time.time() - hours * 3600)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             row = db.execute(f"SELECT COUNT(*) FROM request_log {where}", tuple(params)).fetchone()
         return int(row[0] or 0) if row else 0
 
@@ -302,7 +304,7 @@ class RequestLog:
             params.append(time.time() - hours * 3600)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         try:
-            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db, db:
                 cursor = db.execute(f"DELETE FROM request_log {where}", tuple(params))
                 return int(cursor.rowcount or 0)
         except (OSError, sqlite3.Error) as exc:
@@ -321,7 +323,7 @@ class RequestLog:
             clauses.append("at >= ?")
             params.append(time.time() - hours * 3600)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             rows = db.execute(
                 "SELECT at, guild_id, guild_name, channel_id, user_id, user_name, "
                 f"platform, url, outcome, detail, elapsed_ms, file_count, bytes "
@@ -417,7 +419,7 @@ class RequestLog:
         if self.path is None:
             return out
         cutoff = time.time() - hours * 3600
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             out.update(self._totals(db, "WHERE user_id = ? AND at >= ?", (user_id, cutoff)))
             out["by_platform"] = self._platform_rows(db, "WHERE user_id = ? AND at >= ?", (user_id, cutoff))
             row = db.execute(
@@ -438,7 +440,7 @@ class RequestLog:
             return out
         cutoff = time.time() - hours * 3600
         day_cutoff = time.time() - 86400
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             out.update(self._totals(db, "WHERE at >= ?", (cutoff,)))
             out["by_platform"] = self._platform_rows(db, "WHERE at >= ?", (cutoff,))
             row = db.execute(
@@ -464,7 +466,7 @@ class RequestLog:
         if self.path is None:
             return out
         cutoff = time.time() - hours * 3600
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             out.update(self._totals(db, "WHERE platform = ? AND at >= ?", (platform, cutoff)))
             row = db.execute(
                 "SELECT COUNT(DISTINCT user_id), COUNT(DISTINCT guild_id) "
@@ -618,7 +620,7 @@ class RequestLog:
             clauses.append("user_id = ?")
             params.append(int(user_id))
         params.append(limit)
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             rows = db.execute(
                 "SELECT at, guild_name, user_name, platform, outcome, url, detail, "
                 "file_count, bytes "

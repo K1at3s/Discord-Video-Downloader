@@ -12,6 +12,7 @@ from html.parser import HTMLParser
 
 import httpx
 
+from .http import shared_client
 from .download import DownloadError
 from .links import PostLink
 
@@ -53,7 +54,7 @@ async def fetch_track(link: PostLink) -> SpotifyTrack:
     if not re.fullmatch(r"https://open\.spotify\.com/track/[A-Za-z0-9]+", link.url):
         raise DownloadError("Yalnızca tekil Spotify parça bağlantıları destekleniyor.")
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(10, connect=4), trust_env=False) as client:
+        async with shared_client(timeout=httpx.Timeout(10, connect=4), trust_env=False) as client:
             response = await client.get(link.url)
             response.raise_for_status()
         track = parse_track_page(response.text)

@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
+from .http import shared_client
 from .direct_providers import _stream, _suffix, allowed_media_url
 from .links import PostLink
 from .limits import MAX_MEDIA_ITEMS
@@ -186,7 +187,7 @@ async def download_indownio(link: PostLink, folder: Path, max_bytes: int) -> tup
     urls = indownio_urls(markup, story_id(link.url))
     if not urls:
         return 0, _message(markup)
-    async with httpx.AsyncClient(timeout=httpx.Timeout(40, connect=10), follow_redirects=True,
+    async with shared_client(timeout=httpx.Timeout(40, connect=10), follow_redirects=True,
                                  trust_env=False, transport=httpx.AsyncHTTPTransport(retries=2)) as client:
         count = 0
         for index, (url, kind) in enumerate(urls, 1):

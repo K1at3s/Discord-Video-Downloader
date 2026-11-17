@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .http import shared_client
 from .links import PostLink, parse_link
 from .race import first_success
 
@@ -163,7 +164,7 @@ async def fetch_reddit_post(link: PostLink, title_hint: str | None = None) -> Re
     if not subreddit:
         return None
     headers = {"User-Agent": USER_AGENT}
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False,
+    async with shared_client(timeout=TIMEOUT, follow_redirects=False,
                                  trust_env=False, headers=headers) as client:
         try:
             feed_url = (f"https://www.reddit.com/r/{subreddit}/comments/{link.post_id}/.rss"

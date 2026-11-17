@@ -31,6 +31,9 @@ from .web_providers import download_web
 LOG = logging.getLogger(__name__)
 MEDIA_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
 PROCESS_TIMEOUT = 150
+# A story/highlight is a single small file. Waiting the generic 90 s for the
+# first provider keeps the user's queue locked, so give up quickly and hedge.
+STORY_FIRST_TIMEOUT = 18
 NO_MEDIA_RESULTS = {"no usable media", "no uploadable media"}
 PRIVATE_HINTS = ("login", "private", "authrequired")
 
@@ -116,7 +119,8 @@ async def _yt_dlp(link: PostLink, folder: Path, max_bytes: int, cookie_file: Pat
         sys.executable, "-m", "yt_dlp", "--no-config",
         "--yes-playlist" if link.platform == "threads" else "--no-playlist",
         "--playlist-end", str(MAX_MEDIA_ITEMS), "--max-filesize", str(max_bytes),
-        "--socket-timeout", "15", "--retries", "2", "--fragment-retries", "2",
+        "--socket-timeout", "15", "--retries", "3", "--fragment-retries", "3",
+        "--concurrent-fragments", "4", "--no-part",
         "--restrict-filenames", "--no-write-info-json", "--no-write-thumbnail",
         "--merge-output-format", "mp4", "-f", "bv*+ba/best",
         "-o", str(folder / "%(id)s_%(playlist_index)s.%(ext)s"),
@@ -392,8 +396,10 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         variant = provider_variant(link)
         key = f"{link.platform}:{variant}" if variant else link.platform
         preferred = await provider_memory.preferred(key, link.platform, variant)
-        result = await first_success(names, attempt, stagger=0, priority=preferred,
-                                     grace=provider_memory.hedge_seconds())
+        ordered = await provider_memory.ranked(link.platform, names)
+        grace = await asyncio.to_thread(provider_memory.hedge_seconds, 8.0,
+                                        platform=link.platform, provider=preferred)
+        result = await first_success(ordered, attempt, stagger=0, priority=preferred, grace=grace)
         if result is not None:
             provider_memory.remember(key, result[1])
         else:
@@ -462,7 +468,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                             claimed = True
                         # Try quota-free indown.net first.
                         try:
-                            result = await asyncio.wait_for(attempt("indown"), timeout=90)
+                            result = await asyncio.wait_for(attempt("indown"), timeout=STORY_FIRST_TIMEOUT)
                         except asyncio.TimeoutError:
                             result = None
                         if result is None:
@@ -528,7 +534,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 # Stories or highlights without cache/quota state: original behavior.
                 first = "indown"
                 try:
-                    result = await asyncio.wait_for(attempt(first), timeout=90)
+                    result = await asyncio.wait_for(attempt(first), timeout=STORY_FIRST_TIMEOUT)
                 except asyncio.TimeoutError:
                     result = None
                 if result is not None:

@@ -63,7 +63,7 @@ class RedditArchiveFallbackTests(unittest.IsolatedAsyncioTestCase):
             return client_type(transport=httpx.MockTransport(respond), **kwargs)
 
         link = parse_link("https://www.reddit.com/r/opencode/comments/1xuc834/post/")
-        with patch("media_bot.reddit_post.httpx.AsyncClient", side_effect=client_factory):
+        with patch("media_bot.reddit_post.shared_client", side_effect=client_factory):
             post = await fetch_reddit_post(link)
         self.assertEqual(post.body, "Archived body")
         self.assertIn("/api/posts/ids", seen)
@@ -87,7 +87,7 @@ class RedditArchiveFallbackTests(unittest.IsolatedAsyncioTestCase):
             return client_type(transport=httpx.MockTransport(respond), **kwargs)
 
         link = parse_link("https://www.reddit.com/r/opencode/s/ykPZRiQsc9")
-        with patch("media_bot.reddit_post.httpx.AsyncClient", side_effect=client_factory):
+        with patch("media_bot.reddit_post.shared_client", side_effect=client_factory):
             post = await fetch_reddit_post(link, "DeepSeek V4.1 Flash")
         self.assertEqual(post.body, "Complete archived body")
 

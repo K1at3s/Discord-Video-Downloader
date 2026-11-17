@@ -12,6 +12,7 @@ from pathlib import Path
 import discord
 import httpx
 
+from .http import shared_client
 from .direct_providers import _Meta, _facebook_page
 from .links import PostLink
 from .race import first_success
@@ -66,7 +67,7 @@ async def _fetch(link: PostLink, route: str, cookie_file: Path | None = None) ->
     threads_page = link.platform == "threads" and route == "page"
     headers = CONTENT_HEADERS if threads_page else None
     cookies = _threads_cookies(cookie_file) if threads_page else None
-    async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False, trust_env=False,
+    async with shared_client(timeout=TIMEOUT, follow_redirects=False, trust_env=False,
                                  headers=headers, cookies=cookies) as client:
         if route == "tikwm":
             response = await client.post("https://www.tikwm.com/api/", data={"url": link.url, "hd": "1"})

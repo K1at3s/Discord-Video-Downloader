@@ -154,7 +154,7 @@ class BlueskyDownloadTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temporary, \
                 patch("media_bot.bluesky._run", side_effect=run), \
                 patch("media_bot.bluesky._variants", return_value=[high, low]), \
-                patch("media_bot.bluesky.httpx.AsyncClient", return_value=Client()):
+                patch("media_bot.bluesky.shared_client", return_value=Client()):
             files = await download_bluesky_media(post, Path(temporary), 5)
             self.assertEqual(len(files), 1)
             self.assertEqual(files[0].read_bytes(), b"mp4")

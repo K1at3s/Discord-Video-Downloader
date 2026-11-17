@@ -28,7 +28,7 @@ class CacheEntry:
 
 
 class MediaCache:
-    def __init__(self, root: Path | None = None, ttl: float = 20 * 60, max_bytes: int = 1024 * 1024 * 1024):
+    def __init__(self, root: Path | None = None, ttl: float = 6 * 3600, max_bytes: int = 1024 * 1024 * 1024):
         self.root = root
         self.ttl = ttl
         self.max_bytes = max_bytes
@@ -40,7 +40,7 @@ class MediaCache:
     def enabled(self) -> bool:
         return self._enabled and self.root is not None
 
-    def configure(self, root: Path, ttl: float = 20 * 60, max_bytes: int = 1024 * 1024 * 1024):
+    def configure(self, root: Path, ttl: float = 6 * 3600, max_bytes: int = 1024 * 1024 * 1024):
         self.root = root
         self.ttl = ttl
         self.max_bytes = max_bytes

@@ -12,6 +12,8 @@ from collections import defaultdict
 from contextlib import closing
 from pathlib import Path
 
+from .sqlite_util import open_db
+
 LOG = logging.getLogger(__name__)
 OUTCOMES = {"success", "fault", "no_media", "private", "error", "unavailable", "skipped", "cancelled", "quota"}
 RETENTION_SECONDS = 14 * 86400
@@ -37,7 +39,7 @@ class ProviderMetrics:
 
     def configure(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, closing(sqlite3.connect(path, timeout=5)) as db, db:
+        with self._lock, closing(open_db(path, timeout=5)) as db, db:
             db.execute("CREATE TABLE IF NOT EXISTS provider_attempts ("
                        "at REAL NOT NULL, platform TEXT NOT NULL, provider TEXT NOT NULL, "
                        "outcome TEXT NOT NULL, elapsed_ms INTEGER NOT NULL)")
@@ -66,7 +68,7 @@ class ProviderMetrics:
         if self.path is None:
             return
         try:
-            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db, db:
                 self._cleanup(db, time.time())
                 db.execute("INSERT INTO provider_attempts VALUES (?, ?, ?, ?, ?)",
                            (time.time(), platform, provider, outcome, elapsed_ms))
@@ -78,7 +80,7 @@ class ProviderMetrics:
         if self.path is None:
             return
         try:
-            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db, db:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db, db:
                 self._cleanup(db, time.time())
                 db.execute("INSERT INTO provider_winners (at, platform, provider, variant) VALUES (?, ?, ?, ?)",
                            (time.time(), platform, provider, (variant or "")[:40]))
@@ -90,7 +92,7 @@ class ProviderMetrics:
         if self.path is None:
             return None
         try:
-            with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db:
                 row = db.execute(
                     "SELECT provider FROM provider_winners WHERE platform = ? AND variant = ? AND at >= ? "
                     "ORDER BY at DESC LIMIT 1",
@@ -108,13 +110,51 @@ class ProviderMetrics:
             provider = provider[: -len("-cache")]
         return provider
 
+    def p95_ms(self, platform: str, provider: str, hours: float = 24, *, min_samples: int = 3) -> int:
+        """95th percentile of successful attempts, or 0 when there is not enough data."""
+        if self.path is None:
+            return 0
+        cutoff = time.time() - hours * 3600
+        try:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db:
+                values = [int(row[0]) for row in db.execute(
+                    "SELECT elapsed_ms FROM provider_attempts WHERE at >= ? AND platform = ? "
+                    "AND provider = ? AND outcome = 'success'",
+                    (cutoff, platform, provider),
+                )]
+        except sqlite3.Error as exc:
+            LOG.warning("Provider latency could not be read: %s", exc)
+            return 0
+        if len(values) < max(1, min_samples):
+            return 0
+        return _percentile(values, 95)
+
+    def successful_latencies(self, platform: str, hours: float = 24) -> dict[str, list[int]]:
+        """Successful attempt durations per provider for one platform."""
+        if self.path is None:
+            return {}
+        cutoff = time.time() - hours * 3600
+        grouped: dict[str, list[int]] = defaultdict(list)
+        try:
+            with self._lock, closing(open_db(self.path, timeout=5)) as db:
+                for provider, elapsed_ms in db.execute(
+                    "SELECT provider, elapsed_ms FROM provider_attempts WHERE at >= ? "
+                    "AND platform = ? AND outcome = 'success'",
+                    (cutoff, platform),
+                ):
+                    grouped[str(provider)].append(int(elapsed_ms))
+        except sqlite3.Error as exc:
+            LOG.warning("Provider latencies could not be read: %s", exc)
+            return {}
+        return grouped
+
     def report(self, hours: int = 24) -> list[tuple[str, str, dict[str, int]]]:
         if self.path is None:
             return []
         cutoff = time.time() - hours * 3600
         groups: dict[tuple[str, str], dict[str, int]] = defaultdict(lambda: defaultdict(int))
         durations: dict[tuple[str, str], list[int]] = defaultdict(list)
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             for platform, provider, outcome, elapsed_ms in db.execute(
                 "SELECT platform, provider, outcome, elapsed_ms FROM provider_attempts WHERE at >= ?", (cutoff,)
             ):
@@ -145,7 +185,7 @@ class ProviderMetrics:
         if self.path is None:
             return []
         cutoff = time.time() - hours * 3600
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             rows = db.execute(
                 "SELECT platform, provider, "
                 "SUM(CASE WHEN outcome='quota' THEN 1 ELSE 0 END) AS quota_events, "
@@ -185,7 +225,7 @@ class ProviderMetrics:
     def summary(self, hours: int = 24) -> list[tuple[str, str, str, int, int]]:
         if self.path is None:
             return []
-        with self._lock, closing(sqlite3.connect(self.path, timeout=5)) as db:
+        with self._lock, closing(open_db(self.path, timeout=5)) as db:
             return db.execute(
                 "SELECT platform, provider, outcome, COUNT(*), CAST(AVG(elapsed_ms) AS INTEGER) "
                 "FROM provider_attempts WHERE at >= ? "

@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from .http import shared_client
 from .limits import MAX_MEDIA_ITEMS
 
 LOG = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ async def download_cobalt(source_url: str, folder: Path, max_bytes: int, api_url
         headers["Authorization"] = "Api-Key " + api_key
     timeout = httpx.Timeout(45, connect=5)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=headers, trust_env=False) as client:
+        async with shared_client(timeout=timeout, follow_redirects=False, headers=headers, trust_env=False) as client:
             body = {"url": source_url, "alwaysProxy": True, "localProcessing": "disabled", "videoQuality": str(video_quality)}
             if audio:
                 body.update({"downloadMode": "audio", "audioFormat": "mp3", "audioBitrate": "128"})

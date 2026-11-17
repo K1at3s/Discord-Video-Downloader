@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .http import shared_client
+from .sqlite_util import open_db
 from .reddit_post import ARCTIC, PULLPUSH, RedditPost
 
 TIMEOUT = httpx.Timeout(5, connect=3)
@@ -28,7 +30,7 @@ class AdultQuota:
             db.execute("CREATE TABLE IF NOT EXISTS adult_uses (user_id INTEGER NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(user_id, day))")
 
     def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=5)
+        db = open_db(self.path, timeout=5)
         db.execute("PRAGMA busy_timeout=5000")
         return db
 
@@ -73,7 +75,7 @@ async def reddit_adult_status(post: RedditPost | None) -> bool | None:
         return True
     post_id = urlsplit(post.url).path.split("/comments/")[-1].split("/")[0]
     headers = {"User-Agent": "DiscordMediaBot/1.0 (NSFW label check)"}
-    async with httpx.AsyncClient(timeout=TIMEOUT, trust_env=False, headers=headers) as client:
+    async with shared_client(timeout=TIMEOUT, trust_env=False, headers=headers) as client:
         if post.over_18 is None and post_id:
             for url, params in (
                 (f"{ARCTIC}/api/posts/ids", {"ids": post_id}),

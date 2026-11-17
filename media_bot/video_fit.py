@@ -25,11 +25,16 @@ async def _command(*args: str, timeout: int) -> tuple[int, bytes]:
     return process.returncode or 0, stdout
 
 
-async def fit_video(source: Path, target: Path, max_bytes: int) -> bool:
-    """Reencode only when needed; keep the result below the upload limit."""
+async def fit_video(source: Path, target: Path, max_bytes: int, *,
+                    force: bool = False, max_height: int = 720) -> bool:
+    """Reencode only when needed; keep the result below the upload limit.
+
+    ``force`` is used after Discord rejects an upload: even an apparently small
+    file is reencoded at a lower bitrate so the retry has a real chance.
+    """
     if not source.is_file() or source.stat().st_size == 0:
         return False
-    if source.stat().st_size <= max_bytes:
+    if not force and source.stat().st_size <= max_bytes:
         source.replace(target)
         return True
     async with VIDEO_SLOTS:
@@ -53,7 +58,7 @@ async def fit_video(source: Path, target: Path, max_bytes: int) -> bool:
                 code, _ = await _command(
                     "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
                     "-i", str(source), "-map", "0:v:0", "-map", "0:a?",
-                    "-vf", "scale=w='min(720,iw)':h=-2",
+                    "-vf", f"scale=w='min({max_height},iw)':h=-2",
                     "-c:v", "libx264", "-preset", "veryfast", "-b:v", str(int(video_rate * factor)),
                     "-c:a", "aac", "-b:a", str(audio_rate),
                     "-movflags", "+faststart", str(target), timeout=180,

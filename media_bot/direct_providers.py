@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from .http import shared_client
 from .links import PostLink, parse_link
 from .limits import MAX_MEDIA_ITEMS
 from .x_card import fetch_post
@@ -173,7 +174,7 @@ async def canonical_facebook_post(link: PostLink) -> PostLink | None:
     if link.platform != "facebook" or "/share/p/" not in urlsplit(link.url).path:
         return None
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12, connect=4), follow_redirects=False,
+        async with shared_client(timeout=httpx.Timeout(12, connect=4), follow_redirects=False,
                                      trust_env=False, headers={"User-Agent": USER_AGENT}) as client:
             page = await _facebook_page(client, link.url)
         parser = _Meta()
@@ -219,7 +220,7 @@ async def download_direct(link: PostLink, folder: Path, max_bytes: int) -> tuple
     """Download via one platform-specific API or public-page extractor."""
     try:
         timeout = httpx.Timeout(30, connect=5)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, headers={"User-Agent": USER_AGENT}) as client:
+        async with shared_client(timeout=timeout, follow_redirects=False, trust_env=False, headers={"User-Agent": USER_AGENT}) as client:
             if link.platform == "x":
                 post = await fetch_post(link.post_id or "", enrich_quotes=False)
                 urls = x_media_urls(post) if post else []
@@ -288,7 +289,7 @@ def vx_media_urls(data: dict) -> list[tuple[str, str]]:
 
 async def download_vxtwitter(post_id: str, folder: Path, max_bytes: int) -> tuple[int, str]:
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5), follow_redirects=False, trust_env=False,
+        async with shared_client(timeout=httpx.Timeout(30, connect=5), follow_redirects=False, trust_env=False,
                                      headers={"User-Agent": USER_AGENT}) as client:
             response = await client.get(f"https://api.vxtwitter.com/i/status/{post_id}")
             response.raise_for_status()

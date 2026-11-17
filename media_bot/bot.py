@@ -6,6 +6,8 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import sys
 import tempfile
 import time
 from contextlib import ExitStack
@@ -24,6 +26,7 @@ from .captions import display_chunks, fetch_caption
 from .cooldowns import Cooldowns
 from .download import DownloadError, download_media
 from .highlight_state import HIGHLIGHTS, format_wait
+from .http import close_shared_clients
 from .indownio import is_rate_limited_message, resolve_indownio
 from .links import PostLink, find_links, parse_link
 from .job_slots import JobSlots
@@ -38,6 +41,7 @@ from .reddit_post import RedditPost, fetch_reddit_post
 from .retry_view import RetryView
 from .spotify import fetch_track, find_audio_source
 from .threads_links import highlight_post_link, resolve_threads_link
+from .video_fit import fit_video
 from .x_card import create_card, fetch_post
 from .youtube_view import YoutubeChoiceView
 from .youtube import download_youtube
@@ -46,6 +50,7 @@ LOG = logging.getLogger(__name__)
 STATS_OWNER_ID = int(os.getenv("STATS_OWNER_ID", "1065352859195015260"))
 # Discord's highest upload limit. Anything above this is a config mistake.
 UPLOAD_CEILING = 500 * 1024 * 1024
+VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v"}
 COLORS = {"instagram": 0xC13584, "facebook": 0x1877F2, "reddit": 0xFF4500,
           "tiktok": 0x25F4EE, "youtube": 0xFF0033, "x": 0x20262E,
           "threads": 0x20262E, "douyin": 0x25F4EE, "weibo": 0xE6162D,
@@ -65,6 +70,29 @@ def upload_limit(message: object | None, configured: int) -> int:
     if limit <= 0:
         limit = configured or UPLOAD_CEILING
     return max(1, min(limit, UPLOAD_CEILING))
+
+
+def _prepare_temp_dir(root: Path) -> None:
+    """Keep temporary downloads under the project so Defender exclusions apply."""
+    root.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - 24 * 3600
+    for child in root.iterdir():
+        try:
+            if child.stat().st_mtime >= cutoff:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+        except OSError:
+            continue
+    tempfile.tempdir = str(root)
+
+
+def _upload_too_large(exc: discord.HTTPException) -> bool:
+    text = str(exc).lower()
+    return bool(getattr(exc, "status", None) == 413 or "entity too large" in text
+                or "larger than" in text or "40005" in text)
 
 
 def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -396,6 +424,12 @@ class MediaBot(discord.Client):
 
         self.tree = tree
 
+    async def close(self) -> None:
+        try:
+            await close_shared_clients()
+        finally:
+            await super().close()
+
     async def on_ready(self) -> None:
         LOG.info("Hazır: %s (%s)", self.user, self.user.id if self.user else "?")
         if (HIGHLIGHTS.enabled and HIGHLIGHTS.health_check_enabled
@@ -709,14 +743,14 @@ class MediaBot(discord.Client):
                         await queue_notice.edit(content="⏳ Bağlantın hazırlanıyor.")
                     except discord.HTTPException:
                         pass
-                for link in links:
+                async def process_link(link: PostLink, status_message: discord.Message | None) -> None:
                     outcome = "failure"
                     detail = ""
                     files: list[Path] = []
                     pending_target = None
                     started = time.monotonic()
                     try:
-                        result = await self._handle_link(message, link, status_message=queue_notice)
+                        result = await self._handle_link(message, link, status_message=status_message)
                         if isinstance(result, tuple):
                             outcome, files = result[0], result[1]
                             if len(result) > 2:
@@ -786,6 +820,25 @@ class MediaBot(discord.Client):
                             )
                         except discord.HTTPException:
                             pass
+
+                if len(links) == 1:
+                    await process_link(links[0], queue_notice)
+                else:
+                    # Multiple links used to run one after another. Download two
+                    # at a time and let each upload as soon as it is ready; keep
+                    # the shared status message static to avoid edit races.
+                    if queue_notice:
+                        try:
+                            await queue_notice.edit(content=f"⏳ {len(links)} bağlantı paralel işleniyor...")
+                        except discord.HTTPException:
+                            pass
+                    link_slots = asyncio.Semaphore(2)
+
+                    async def run_link(link: PostLink) -> None:
+                        async with link_slots:
+                            await process_link(link, None)
+
+                    await asyncio.gather(*(run_link(link) for link in links))
         finally:
             if queue_notice:
                 try:
@@ -795,6 +848,20 @@ class MediaBot(discord.Client):
 
     async def _reply(self, message: discord.Message, content: str = "", files: list[Path] | None = None,
                      *, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> discord.Message:
+        try:
+            return await self._reply_once(message, content, files, embed=embed, view=view)
+        except discord.HTTPException as exc:
+            if not files or not _upload_too_large(exc):
+                raise
+            shrunk = await self._fit_attachments(files, message)
+            if not shrunk:
+                raise
+            LOG.info("Discord rejected an upload as too large; retrying %d file(s) smaller", len(shrunk))
+            return await self._reply_once(message, content, shrunk, embed=embed, view=view)
+
+    async def _reply_once(self, message: discord.Message, content: str = "", files: list[Path] | None = None,
+                          *, embed: discord.Embed | None = None,
+                          view: discord.ui.View | None = None) -> discord.Message:
         with ExitStack() as stack:
             attachments = []
             for path in files or []:
@@ -803,6 +870,29 @@ class MediaBot(discord.Client):
                 attachments.append(attachment)
             return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
                                        mention_author=False, suppress_embeds=embed is None)
+
+    async def _fit_attachments(self, files: list[Path], message: object) -> list[Path] | None:
+        """Reencode oversized videos after a 413 so one retry can succeed."""
+        limit = upload_limit(message, self.upload_bytes)
+        reduced: list[Path] = []
+        changed = False
+        for path in files:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                reduced.append(path)
+                continue
+            if path.suffix.lower() not in VIDEO_SUFFIXES or size < 2 * 1024 * 1024:
+                reduced.append(path)
+                continue
+            target = path.with_name(f"{path.stem}.fit{path.suffix}")
+            budget = max(1, int(min(size * 0.7, (limit or size) * 0.9)))
+            if await fit_video(path, target, budget, force=True, max_height=480):
+                reduced.append(target)
+                changed = True
+            else:
+                reduced.append(path)
+        return reduced if changed else None
 
     async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]] | tuple[str, list[Path], YoutubeChoiceView]:
         async def set_status(text: str) -> None:
@@ -1162,6 +1252,7 @@ def main() -> None:
         if gallery_rs_path and not gallery_rs_path.is_file():
             raise ValueError("GALLERY_DL_RS_PATH mevcut bir programı göstermeli")
         database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
+        _prepare_temp_dir(database_path.parent / "tmp")
         METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
         REQUESTS.configure(
             database_path.with_name("request_log.sqlite3"),
@@ -1176,7 +1267,7 @@ def main() -> None:
         )
         MEDIA_CACHE.configure(
             database_path.parent / "media_cache",
-            ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 20, 1440) * 60,
+            ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 360, 10080) * 60,
             max_bytes=_positive_int("MEDIA_CACHE_MAX_MB", 1024, 10240) * 1024 * 1024,
         )
         HIGHLIGHTS.configure(
@@ -1203,6 +1294,14 @@ def main() -> None:
         )
     except ValueError as exc:
         raise SystemExit(f"Yapılandırma hatası: {exc}") from exc
+    if sys.platform != "win32":
+        try:
+            import uvloop
+        except ImportError:
+            pass
+        else:
+            if hasattr(uvloop, "install"):
+                uvloop.install()
     try:
         bot.run(token, log_handler=None)
     except discord.PrivilegedIntentsRequired:

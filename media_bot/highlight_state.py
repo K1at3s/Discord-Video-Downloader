@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .sqlite_util import open_db
+
 LOG = logging.getLogger(__name__)
 
 HIGHLIGHT_RE = re.compile(r"/stories/highlights/(\d+)/?", re.I)
@@ -65,7 +67,7 @@ class TokenBucket:
             self._load()
 
     def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.db_path, timeout=5)  # type: ignore[arg-type]
+        db = open_db(self.db_path, timeout=5)  # type: ignore[arg-type]
         db.execute("PRAGMA busy_timeout=5000")
         return db
 
@@ -174,7 +176,7 @@ class HighlightUserQuota:
             self._cleanup(db)
 
     def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=5)
+        db = open_db(self.path, timeout=5)
         db.execute("PRAGMA busy_timeout=5000")
         return db
 

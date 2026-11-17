@@ -54,7 +54,7 @@ Copy-Item .env.example .env
 .\start-bot.ps1
 ```
 
-Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip `python -m media_bot.bot` çalıştırın. Botun çevrimiçi kalması için çalıştığı makine açık kalmalıdır.
+Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip `python -m media_bot.bot` çalıştırın. Botun çevrimiçi kalması için çalıştığı makine açık kalmalıdır. Windows'ta indirme/ffmpeg gecikmesini azaltmak için yönetici PowerShell'de `.\scripts\defender-exclusions.ps1` çalıştırabilirsiniz (proje, `data`, `.venv`, `vendor` ve python/ffmpeg süreçleri için Defender istisnası ekler).
 
 ## `.env` ayarları
 
@@ -68,7 +68,7 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `YTDLP_REMOTE_EJS` | `0` | `1` olursa YouTube `yt-dlp` yedeği gerektiğinde GitHub’dan EJS betiği indirebilir; varsayılan kapalıdır |
 | `MAX_LINKS_PER_MESSAGE` | `3` | Tek mesajda işlenen bağlantı sayısı; en fazla 10 |
 | `MAX_CONCURRENT_JOBS` | `2` | Mesaj ve YouTube düğmesi işleri için toplam eşzamanlı sınır; en fazla 10 |
-| `PROVIDER_HEDGE_SECONDS` | `8` | Son başarılı sağlayıcı tek başına denenir; bu süre içinde bitmezse diğer sağlayıcılar devreye girer. `0` = beklemeden yarış (YouTube MP3 varsayılanı `5`) |
+| `PROVIDER_HEDGE_SECONDS` | Boş | Son başarılı sağlayıcı tek başına denenir; boşsa ölçülen p95'e göre 3–20 sn arasında uyarlanır. Sabit değer yazılırsa o kullanılır; `0` = beklemeden yarış (YouTube MP3 varsayılanı `5`) |
 | `DATABASE_PATH` | `data/bot.sqlite3` | +18 kotası ve highlight quota/cache durumu için SQLite dosyası |
 | `COBALT_API_URL` | Boş | İsteğe bağlı Cobalt adresi, örn. `http://127.0.0.1:9000/` |
 | `COBALT_API_KEY` | Boş | Cobalt örneği gerektiriyorsa anahtar |
@@ -81,7 +81,7 @@ Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip
 | `HIGHLIGHT_HEALTHCHECK_ENABLED` | `1` | indown.io highlight sağlık kontrolünü aç/kapat (`0` kapatır) |
 | `HIGHLIGHT_HEALTHCHECK_HOURS` | `24` | Sağlık kontrolü aralığı (saat); kontrol indirmesiz resolve yapar ve kota harcayabilir |
 | `HIGHLIGHT_HEALTHCHECK_RESERVE` | `3` | Sağlık kontrolünün kullanıcılar için ayırdığı minimum bucket jetonu |
-| `MEDIA_CACHE_TTL_MINUTES` | `20` | Aynı URL tekrarları için kısa süreli genel medya önbelleği süresi (dakika) |
+| `MEDIA_CACHE_TTL_MINUTES` | `360` | Aynı URL tekrarları için genel medya önbelleği süresi (dakika); 6 saat, en fazla 7 gün |
 | `MEDIA_CACHE_MAX_MB` | `1024` | Genel medya önbelleği toplam boyut sınırı (MB) |
 | `STATS_OWNER_ID` | `1065352859195015260` | `!stats` / `!panel` ve başka kullanıcının `!info` sorgusunu kullanabilecek tek Discord kullanıcı ID'si |
 | `MAINTENANCE_MODE` | *(boş)* | `1` ise bot açılışta bakım modunda başlar; boşsa son durum `data/maintenance.json` dosyasından okunur |
@@ -113,14 +113,15 @@ docker compose -f cobalt.compose.yaml up -d
 - X tweet metni, alıntılar, profil fotoğrafları, mavi tikler ve erişilebilen sayaçlar koyu PNG karta çizilir. Medya varsa ayrıca yüklenir.
 - Reddit metni alınabildiğinde koyu PNG sayfalarına çizilir. Birden çok sayfa aynı Media Gallery mesajındadır; 10 sayfadan sonra yeni mesaj açılır. [Reddit RSS desteğini 13 Kasım 2026'da sonlandıracağını duyurdu](https://www.reddit.com/r/modnews/comments/1xuj8jp/mod_monthly_your_november_2026_newsletter_is_here/); arşiv yedekleri yeni gönderilerde gecikebilir. Reddit desteği bu yüzden en iyi çabadır.
 - YouTube düğmelerini yalnızca bağlantıyı gönderen kişi kullanır. Düğmeler beş dakika geçerlidir. MP3 128 kb/sn hazırlanır; dosya embed/kart içine konmaz, **doğrudan normal ek** olarak ve `Sanatçı - Şarkı.mp3` adıyla gönderilir. Çözünürlük düğmeleri üst sınırdır.
-- YouTube sağlayıcı seçimi öğrenmelidir: son başarılı sağlayıcı (kalite bazında) önce **tek başına** denenir; yalnızca başarısız olursa veya 5 sn (video 8 sn) içinde bitmezse diğerleri devreye girer. Böylece her istekte tüm sağlayıcılar denenmez.
-- Bu öğrenme tüm platformlarda geçerlidir: son kazanan sağlayıcı bağlam bazında (Instagram reel/story/highlight/post, Threads kısa/gönderi, diğer platformlar) hatırlanır ve `data/provider_metrics.sqlite3` içindeki `provider_winners` tablosunda saklanır. Bot yeniden başlasa da tercih korunur; `PROVIDER_HEDGE_SECONDS` (varsayılan 8) içinde yanıt gelmezse diğer sağlayıcılar devreye girer.
+- YouTube sağlayıcı seçimi öğrenmelidir: son başarılı sağlayıcı (kalite bazında) önce **tek başına** denenir; yalnızca başarısız olursa veya tercih edilen sağlayıcının ölçülen p95 süresine göre belirlenen bekleme (boşsa 3–20 sn) aşılırsa diğerleri devreye girer. Böylece her istekte tüm sağlayıcılar denenmez.
+- Bu öğrenme tüm platformlarda geçerlidir: son kazanan sağlayıcı bağlam bazında (Instagram reel/story/highlight/post, Threads kısa/gönderi, diğer platformlar) hatırlanır ve `data/provider_metrics.sqlite3` içindeki `provider_winners` tablosunda saklanır. Bot yeniden başlasa da tercih korunur. Sağlayıcı sırası, son 24 saatteki başarılı denemelerin p95 süresine göre de güncellenir; `PROVIDER_HEDGE_SECONDS` boşsa bekleme süresi de bu p95'ten türetilir (3–20 sn).
 - Spotify'ın korumalı ses akışı indirilmez. Bot parça adı, sanatçı ve süreyle YouTube'da tam uzunlukta kayıt arar; uygun eşleşmeyi MP3 dosyası olarak **doğrudan ekler**, embed kullanmaz. Kayıplı kaynaktan gerçek FLAC üretilemeyeceği için FLAC etiketi kullanılmaz.
 - Sağlayıcılar kısa aralıklarla yarışır; ilk eksiksiz sonuç alınır. Platformlar ve web servisleri değişebildiğinden kesintisiz başarı garantisi yoktur. Sağlayıcı sırası ve araştırma notları [PROVIDERS.md](PROVIDERS.md) içindedir.
 - Instagram gönderilerinde açıklamadaki like/yorum sayıları ve `@kullanıcı · tarih` ön eki tırnakları yok sayılarak kırpılır; hikâye ve öne çıkan kartlarında açıklama yok sayılır, **`@kullanıcı · tarihi`** ile footer verilir. Kaynak düğmesi footerda aynı kartın yanındadır.
 - Çerezsiz Instagram öne çıkanlar `indown.net` ile denenir, gerekirse `indown.io`ya düşer (`~20/saat` IP kotası). Aynı highlight tekrarlarında disk önbelleği ve eşzamanlı istek birleştirme (single-flight) kota tüketimini azaltır; kullanıcı başı saatlik/günlük limitler ve kalan süreli kota mesajları uygulanır. indown.io kotası tamamen sınırsız değildir.
 - Dosyalar geçici klasörde işlenip Discord'a gönderildikten sonra silinir. Bot medya arşivi tutmaz (highlight ve kısa süreli genel medya önbellekleri TTL/boyut sınırıyla temizlenir).
-- Aynı kullanıcı için aynı anda yalnızca bir iş çalışır; sonraki istek sıraya alınır ve geçici durum mesajı gösterilir. Farklı kullanıcılar `MAX_CONCURRENT_JOBS` sınırına kadar paralel işlenir. Aynı bağlantıyı farklı kullanıcılar gönderirse şu anda ayrı indirme yapılır.
+- Discord dosyayı yine de "çok büyük" diye reddederse (413), bot videoyu daha düşük bit hızı/480p ile yeniden kodlayıp bir kez daha dener; yine olmazsa sınır mesajı gösterir.
+- Aynı kullanıcı için aynı anda yalnızca bir iş çalışır; sonraki istek sıraya alınır ve geçici durum mesajı gösterilir. Tek mesajdaki birden çok bağlantı ikişerli paralel işlenir ve hazır olan dosya beklemeden yüklenir. Farklı kullanıcılar `MAX_CONCURRENT_JOBS` sınırına kadar paralel işlenir. Aynı bağlantıyı farklı kullanıcılar gönderirse şu anda ayrı indirme yapılır.
 
 ## +18 koruması ve SQLite
 
@@ -143,7 +144,9 @@ Reddit'in +18 durumu doğrulanamazsa bağlantı işlenmez. Bu denetim **Reddit'e
 | `media_bot/captions.py`, `metadata_fallback.py`, `limits.py` | Açıklama, önizleme, dosya sınırları |
 | `media_bot/provider_metrics.py` | Sağlayıcı denemelerinin yerel 24 saatlik özeti |
 | `media_bot/request_log.py` | Sunucu/kullanıcı/link bazlı işlem kayıtları ve başarı yüzdesi özeti |
+| `media_bot/http.py`, `sqlite_util.py` | Paylaşılan HTTP bağlantı havuzu ve WAL ayarlı SQLite bağlantıları |
 | `media_bot/job_slots.py` | Toplam ve kullanıcı başına eşzamanlılık sınırı |
+| `scripts/defender-exclusions.ps1` | Windows Defender istisnaları (yönetici olarak çalıştırılır) |
 | `tests/` | Birim ve akış testleri |
 
 Firefox eklentisi ayrı bir yerel çalışma klasörüdür; `.gitignore` içinde tutulur ve bu repoya dahil edilmez.

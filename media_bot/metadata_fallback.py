@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import discord
 import httpx
 
+from .http import shared_client
 from .direct_providers import _Meta, _facebook_page, allowed_media_url
 from .links import PostLink
 
@@ -42,7 +43,7 @@ def parse_preview(page: str, platform: str) -> Preview:
 
 async def fetch_preview(link: PostLink) -> Preview:
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=4), follow_redirects=False,
+        async with shared_client(timeout=httpx.Timeout(8, connect=4), follow_redirects=False,
                                      trust_env=False, headers={"User-Agent": "Mozilla/5.0"}) as client:
             if link.platform == "facebook":
                 page = await _facebook_page(client, link.url)

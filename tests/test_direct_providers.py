@@ -77,7 +77,7 @@ class RedditDirectTimeoutTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(403, request=httpx.Request("GET", url))
 
         link = parse_link("https://www.reddit.com/r/test/comments/abc123/post/")
-        with patch("media_bot.direct_providers.httpx.AsyncClient", return_value=Client()):
+        with patch("media_bot.direct_providers.shared_client", return_value=Client()):
             count, _ = await download_direct(link, Path("unused"), 1024)
         self.assertEqual(count, 0)
         self.assertEqual(requests[0]["timeout"].connect, 1)

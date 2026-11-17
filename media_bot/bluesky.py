@@ -11,6 +11,7 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from .http import shared_client
 from .direct_providers import _stream, allowed_media_url
 from .download import _run
 from .links import PostLink
@@ -109,7 +110,7 @@ async def fetch_bluesky_post(link: PostLink) -> BlueskyPost | None:
         return None
     actor, rkey = match.groups()
     timeout = httpx.Timeout(8, connect=4)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False,
+    async with shared_client(timeout=timeout, trust_env=False,
                                  headers={"atproto-accept-labelers": MODERATION_DID}) as client:
         profile_labels: list[dict] = []
         if actor.startswith("did:"):
@@ -158,7 +159,7 @@ def _variants(playlist_url: str, content: str) -> list[str]:
 async def download_bluesky_media(post: BlueskyPost, folder: Path, max_bytes: int) -> list[Path]:
     folder.mkdir(parents=True, exist_ok=True)
     files: list[Path] = []
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
+    async with shared_client(timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
                                  trust_env=False) as client:
         for index, (kind, url) in enumerate(post.media, 1):
             if kind == "image":

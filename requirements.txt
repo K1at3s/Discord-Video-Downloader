@@ -8,4 +8,5 @@ Pillow>=11,<13
 httpx>=0.27,<1
 curl_cffi>=0.7,<1
 python-dotenv>=1,<2
+uvloop>=0.19; sys_platform != "win32"
 

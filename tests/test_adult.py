@@ -41,7 +41,7 @@ class AdultGateTests(unittest.IsolatedAsyncioTestCase):
                 200, json={"data": {"over18": True}}))
             return client_type(transport=transport, **kwargs)
 
-        with patch("media_bot.adult.httpx.AsyncClient", side_effect=client_factory):
+        with patch("media_bot.adult.shared_client", side_effect=client_factory):
             self.assertTrue(await reddit_adult_status(post))
 
     async def test_adult_post_requires_nsfw_and_daily_quota(self):

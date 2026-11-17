@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from .http import shared_client
 from .cobalt import download_cobalt
 from .circuit_breaker import BREAKERS, provider_fault
 from .direct_providers import _stream, allowed_media_url
@@ -30,7 +31,7 @@ CHOICES = {"mp3", "360", "720", "1080"}
 async def fetch_youtube_meta(url: str) -> tuple[str | None, str | None]:
     """Return ``(title, channel)`` from the public oEmbed endpoint (no API key)."""
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8, connect=4), trust_env=False) as client:
+        async with shared_client(timeout=httpx.Timeout(8, connect=4), trust_env=False) as client:
             response = await client.get("https://www.youtube.com/oembed", params={"url": url, "format": "json"})
             response.raise_for_status()
             data = response.json()
@@ -127,7 +128,7 @@ async def _to_mp3(source: Path, target: Path, max_bytes: int) -> bool:
 async def _gendownload(link: PostLink, folder: Path, choice: str, max_bytes: int) -> tuple[int, str]:
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=5), follow_redirects=False, trust_env=False) as client:
+            async with shared_client(timeout=httpx.Timeout(30, connect=5), follow_redirects=False, trust_env=False) as client:
                 response = await client.post("https://gendownload.com/api/extract", json={"url": link.url})
                 response.raise_for_status()
                 options = gendownload_options(response.json(), choice, max_bytes)
@@ -155,7 +156,9 @@ async def _gendownload(link: PostLink, folder: Path, choice: str, max_bytes: int
 async def _yt_dlp(link: PostLink, folder: Path, choice: str, max_bytes: int, cookie_file: Path | None) -> tuple[int, str]:
     base = [sys.executable, "-m", "yt_dlp", "--no-config", "--no-playlist",
                "--socket-timeout", "15",
-               "--retries", "2", "--fragment-retries", "2", "--max-filesize", str(max_bytes),
+               "--retries", "3", "--fragment-retries", "3",
+               "--concurrent-fragments", "4", "--no-part",
+               "--max-filesize", str(max_bytes),
                "-o", str(folder / "youtube.%(ext)s")]
     if os.getenv("YTDLP_REMOTE_EJS", "0") == "1":
         base.extend(("--remote-components", "ejs:github"))
@@ -175,17 +178,32 @@ async def _yt_dlp(link: PostLink, folder: Path, choice: str, max_bytes: int, coo
                     partial.unlink(missing_ok=True)
         return last
     else:
-        height = int(choice)
-        # Reserve space for the audio stream before selecting a video format.
-        # yt-dlp's --max-filesize rejects an oversize merged result but does
-        # not automatically retry a lower resolution.
+        # Prefer the requested height, then step down only when the result is
+        # missing/oversize. A failed 403/network attempt is not retried lower.
+        heights = [int(choice)]
+        for lower in (720, 480, 360):
+            if lower < heights[0]:
+                heights.append(lower)
+        last = (1, "uygun kalite bulunamadı")
         video_budget = int(max_bytes * 0.75)
         audio_budget = max_bytes - video_budget
-        formats = (f"bv[vcodec^=avc1][height<={height}][filesize<{video_budget}]"
-                   f"+ba[ext=m4a][filesize<{audio_budget}]"
-                   f"/b[ext=mp4][height<={height}][filesize<{max_bytes}]")
-        command = [*base, "-f", formats, "--merge-output-format", "mp4", link.url]
-        return await _run(command, timeout=180, folder=folder, max_total_bytes=max_bytes * 3)
+        size_hints = ("max-filesize", "larger than", "requested format", "no video formats")
+        for height in heights:
+            formats = (f"bv[vcodec^=avc1][height<={height}][filesize<{video_budget}]"
+                       f"+ba[ext=m4a][filesize<{audio_budget}]"
+                       f"/b[ext=mp4][height<={height}][filesize<{max_bytes}]")
+            command = [*base, "-f", formats, "--merge-output-format", "mp4", link.url]
+            code, error = await _run(command, timeout=180, folder=folder,
+                                     max_total_bytes=max_bytes * 3)
+            last = (code, error)
+            if code == 0 and _selected_file(folder, choice, max_bytes):
+                return last
+            for partial in folder.glob("youtube.*"):
+                if partial.is_file():
+                    partial.unlink(missing_ok=True)
+            if code != 0 and not any(hint in (error or "").lower() for hint in size_hints):
+                return last
+        return last
 
 
 def _selected_file(folder: Path, choice: str, max_bytes: int) -> Path | None:
@@ -286,8 +304,12 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
     key = f"youtube:{choice}"
     preferred = await provider_memory.preferred(key, "youtube", choice)
     # Preferred provider runs alone; the rest only start if it fails or is slow.
-    grace = provider_memory.hedge_seconds(5.0 if choice == "mp3" else 8.0)
-    result = await first_success(providers, attempt, priority=preferred, grace=grace)
+    ordered = await provider_memory.ranked("youtube", providers)
+    grace = await asyncio.to_thread(
+        provider_memory.hedge_seconds, 5.0 if choice == "mp3" else 8.0,
+        platform="youtube", provider=preferred,
+    )
+    result = await first_success(ordered, attempt, priority=preferred, grace=grace)
     if result is not None:
         provider_memory.remember(key, result[1])
         await asyncio.to_thread(METRICS.record_winner, "youtube", result[1], choice)
