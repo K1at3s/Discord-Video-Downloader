@@ -510,11 +510,23 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         if not cache_eligible:
             return
         src_dir = folder / provider
+        candidates: list[Path] = []
         if src_dir.is_dir():
-            src_files = [p for p in src_dir.rglob("*") if p.is_file()]
-        else:
-            src_files = files
-        MEDIA_CACHE.put(link.platform, link.url, bool(cookie_file), provider, src_files)
+            candidates.extend(p for p in src_dir.rglob("*") if p.is_file())
+        candidates.extend(p for p in files if p.is_file())
+        seen: set[str] = set()
+        src_files: list[Path] = []
+        for p in candidates:
+            try:
+                key = str(p.resolve())
+            except OSError:
+                key = str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            src_files.append(p)
+        if src_files:
+            MEDIA_CACHE.put(link.platform, link.url, bool(cookie_file), provider, src_files)
 
     async def _success(files: list[Path], provider: str) -> tuple[list[Path], str]:
         await asyncio.to_thread(METRICS.record_winner, link.platform, provider, provider_variant(link))

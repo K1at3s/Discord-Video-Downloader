@@ -21,6 +21,7 @@ from .direct_providers import _stream, allowed_media_url
 from .download import DownloadError, _run
 from .http import shared_client
 from .links import PostLink
+from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
 from .race import first_success
 from .video_fit import fit_video
@@ -307,6 +308,16 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
     if effective != choice:
         LOG.info("YouTube kalite ön tahmini: %sp -> %sp (limit ~%d MB)", choice, effective, upload_limit // (1024 * 1024))
     choice = effective
+    cache_variant = f"{choice}|{upload_limit}"
+    if MEDIA_CACHE.enabled:
+        cached = await asyncio.to_thread(MEDIA_CACHE.get, "youtube", link.url, bool(cookie_file), cache_variant)
+        if cached:
+            copied = await asyncio.to_thread(MEDIA_CACHE.copy_to, cached, folder)
+            usable = [p for p in copied if p.is_file() and 0 < p.stat().st_size <= upload_limit]
+            if usable:
+                await asyncio.to_thread(METRICS.record_winner, "youtube", f"{cached.provider}-cache")
+                LOG.info("YouTube %s served from media cache via %s", choice, cached.provider)
+                return usable[0], cached.provider
     providers = ["cobalt", "gendownload"] if cobalt_url else ["gendownload"]
     providers.append("yt-dlp")
     failures = []
@@ -339,6 +350,7 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
                 BREAKERS.success(name, "youtube")
                 reported = True
                 await asyncio.to_thread(METRICS.record, "youtube", name, "success", int((time.monotonic() - started) * 1000))
+                await asyncio.to_thread(MEDIA_CACHE.put, "youtube", link.url, bool(cookie_file), name, [selected], cache_variant)
                 LOG.info("YouTube %s from %s", choice, name)
                 return selected, name
             fault = provider_fault(error)

@@ -50,8 +50,8 @@ class MediaCache:
         except OSError:
             pass
 
-    def _key(self, platform: str, url: str, cookie: bool) -> str:
-        raw = f"{platform}\n{url}\n{int(cookie)}".encode("utf-8", "ignore")
+    def _key(self, platform: str, url: str, cookie: bool, variant: str = "") -> str:
+        raw = f"{platform}\n{url}\n{int(cookie)}\n{variant}".encode("utf-8", "ignore")
         return hashlib.sha256(raw).hexdigest()
 
     def _dir(self, key: str) -> Path:
@@ -91,10 +91,10 @@ class MediaCache:
             if total <= self.max_bytes:
                 break
 
-    def get(self, platform: str, url: str, cookie: bool) -> CacheEntry | None:
+    def get(self, platform: str, url: str, cookie: bool, variant: str = "") -> CacheEntry | None:
         if not self.enabled:
             return None
-        key = self._key(platform, url, cookie)
+        key = self._key(platform, url, cookie, variant)
         base = self._dir(key)
         meta_path = base / "meta.json"
         try:
@@ -113,10 +113,10 @@ class MediaCache:
             return None
         return CacheEntry(path=base, files=resolved, provider=provider, created_at=created)
 
-    def put(self, platform: str, url: str, cookie: bool, provider: str, source_files: list[Path]) -> CacheEntry | None:
+    def put(self, platform: str, url: str, cookie: bool, provider: str, source_files: list[Path], variant: str = "") -> CacheEntry | None:
         if not self.enabled or not source_files:
             return None
-        key = self._key(platform, url, cookie)
+        key = self._key(platform, url, cookie, variant)
         base = self._dir(key)
         try:
             self.cleanup()
@@ -231,8 +231,8 @@ class MediaCache:
             else:
                 fut.set_result(result)
 
-    def key_for(self, platform: str, url: str, cookie: bool) -> str:
-        return self._key(platform, url, cookie)
+    def key_for(self, platform: str, url: str, cookie: bool, variant: str = "") -> str:
+        return self._key(platform, url, cookie, variant)
 
 
 MEDIA_CACHE = MediaCache()
