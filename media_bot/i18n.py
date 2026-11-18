@@ -71,11 +71,19 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tr": "YouTube bağlantılarında kalite sorulsun mu yoksa varsayılan uygulansın mı.",
         "en": "Whether to ask for quality or use a default for YouTube links.",
     },
+    "reply_messages": {
+        "tr": "Mesaja yanıt (reply)",
+        "en": "Reply to message",
+    },
+    "reply_messages_desc": {
+        "tr": "Bot yanıtlarını kullanıcının mesajına Discord reply referansı ile gönderir.",
+        "en": "Send bot responses as Discord replies to the user's message.",
+    },
     "on": {"tr": "Açık", "en": "On"},
     "off": {"tr": "Kapalı", "en": "Off"},
     "settings_hint": {
-        "tr": "İpucu: `/ayar` içinde `otomatik_thread` veya `youtube` seçeneğini vererek ayarı değiştirebilirsin.",
-        "en": "Tip: provide `otomatik_thread` or `youtube` in `/ayar` to change a setting.",
+        "tr": "İpucu: `/ayar` içinde `otomatik_thread`, `youtube` veya `yanitla` seçeneğini vererek ayarı değiştirebilirsin.",
+        "en": "Tip: provide `otomatik_thread`, `youtube`, or `yanitla` in `/ayar` to change a setting.",
     },
     "invalid_quality": {
         "tr": "Geçersiz YouTube kalite seçimi.",
@@ -111,11 +119,14 @@ def quality_label(value: str, locale: str) -> str:
 def describe_settings(settings: GuildSettings, locale: str) -> str:
     thread = t("on", locale) if settings.auto_thread else t("off", locale)
     quality = quality_label(settings.youtube_quality, locale)
+    reply = t("on", locale) if getattr(settings, "reply_messages", True) else t("off", locale)
     return (
         f"**{t('auto_thread', locale)}:** {thread}\n"
         f"-# {t('auto_thread_desc', locale)}\n\n"
         f"**{t('youtube_default', locale)}:** {quality}\n"
-        f"-# {t('youtube_default_desc', locale)}"
+        f"-# {t('youtube_default_desc', locale)}\n\n"
+        f"**{t('reply_messages', locale)}:** {reply}\n"
+        f"-# {t('reply_messages_desc', locale)}"
     )
 
 

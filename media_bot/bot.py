@@ -6,19 +6,15 @@ import asyncio
 import logging
 import os
 import re
-import shutil
-import sys
 import tempfile
 import time
 from contextlib import ExitStack
-from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import discord
 import httpx
-from dotenv import load_dotenv
 
 from .adult import AdultQuota, channel_is_nsfw, istanbul_day, reddit_adult_status
 from .backup import backup_databases, database_paths
@@ -52,231 +48,23 @@ from .x_card import create_card, fetch_post
 from .youtube import download_youtube
 from .youtube_view import YoutubeChoiceView, deliver_youtube, status_view
 
+from .bot_runtime import _bounded_int, _upload_too_large
+from .bot_slash_commands import register_commands
+from .discord_support import (
+    COLORS as COLORS,  # noqa: F401
+    InteractionMessage as InteractionMessage,  # noqa: F401
+    ThreadMessage as ThreadMessage,  # noqa: F401
+    UPLOAD_CEILING as UPLOAD_CEILING,  # noqa: F401
+    VIDEO_SUFFIXES,
+    _instagram_story_meta as _instagram_story_meta,  # noqa: F401
+    media_gallery_view,
+    reddit_embed_preview,
+    source_button,
+    upload_limit,
+)
+
 LOG = logging.getLogger(__name__)
 STATS_OWNER_ID = int(os.getenv("STATS_OWNER_ID", "1065352859195015260"))
-# Discord's highest upload limit. Anything above this is a config mistake.
-UPLOAD_CEILING = 500 * 1024 * 1024
-VIDEO_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v"}
-COLORS = {"instagram": 0xC13584, "facebook": 0x1877F2, "reddit": 0xFF4500,
-          "tiktok": 0x25F4EE, "youtube": 0xFF0033, "x": 0x20262E,
-          "threads": 0x20262E, "douyin": 0x25F4EE, "weibo": 0xE6162D,
-          "streamable": 0x0F8FFA, "bluesky": 0x1083FE}
-
-
-def upload_limit(message: object | None, configured: int) -> int:
-    """Use the guild's real upload limit, optionally capped by ``configured``."""
-    limit = 0
-    guild = getattr(message, "guild", None)
-    try:
-        limit = int(getattr(guild, "filesize_limit", 0) or 0)
-    except (TypeError, ValueError):
-        limit = 0
-    if configured > 0:
-        limit = min(limit, configured) if limit else configured
-    if limit <= 0:
-        limit = configured or UPLOAD_CEILING
-    return max(1, min(limit, UPLOAD_CEILING))
-
-
-def _configure_logging() -> None:
-    """Console output plus a rotating file so long runs do not fill the disk."""
-    from logging.handlers import RotatingFileHandler
-
-    level_name = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
-    level = getattr(logging, level_name, logging.INFO)
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    root = logging.getLogger()
-    root.setLevel(level)
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-    console = logging.StreamHandler()
-    console.setFormatter(formatter)
-    root.addHandler(console)
-
-    raw = os.getenv("LOG_FILE", "data/bot.log").strip()
-    if raw.lower() in {"", "0", "off", "false"}:
-        return
-    try:
-        path = Path(raw).resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(path, maxBytes=10 * 1024 * 1024,
-                                           backupCount=7, encoding="utf-8")
-    except OSError as exc:
-        logging.getLogger(__name__).warning("Log dosyası açılamadı: %s", exc)
-        return
-    file_handler.setFormatter(formatter)
-    root.addHandler(file_handler)
-
-
-def _prepare_temp_dir(root: Path) -> None:
-    """Keep temporary downloads under the project so Defender exclusions apply."""
-    root.mkdir(parents=True, exist_ok=True)
-    cutoff = time.time() - 24 * 3600
-    for child in root.iterdir():
-        try:
-            if child.stat().st_mtime >= cutoff:
-                continue
-            if child.is_dir():
-                shutil.rmtree(child, ignore_errors=True)
-            else:
-                child.unlink(missing_ok=True)
-        except OSError:
-            continue
-    tempfile.tempdir = str(root)
-
-
-def _upload_too_large(exc: discord.HTTPException) -> bool:
-    text = str(exc).lower()
-    return bool(getattr(exc, "status", None) == 413 or "entity too large" in text
-                or "larger than" in text or "40005" in text)
-
-
-def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
-    value = int(os.getenv(name, str(default)))
-    if not minimum <= value <= maximum:
-        raise ValueError(f"{name} {minimum} ile {maximum} arasında olmalı")
-    return value
-
-
-def _positive_int(name: str, default: int, maximum: int) -> int:
-    value = int(os.getenv(name, str(default)))
-    if not 1 <= value <= maximum:
-        raise ValueError(f"{name} 1 ile {maximum} arasında olmalı")
-    return value
-
-def source_button(url: str) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    view.add_item(discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=url))
-    return view
-
-
-def _reel_caption(caption: str) -> tuple[str, str | None, str | None]:
-    """Split Instagram's "<text> - @user on <date>" tail into handle and date."""
-    match = re.search(r"\s*-\s*@([\w.]+)\s+on\s+(.+?)\s*$", caption, re.DOTALL)
-    if not match:
-        return caption.strip(), None, None
-    return caption[:match.start()].rstrip(), match.group(1), match.group(2).strip()
-
-
-_MONTHS_TR = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz",
-              "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık")
-
-
-def _instagram_date(media_id: str) -> str | None:
-    """Decode the creation date from an Instagram media id (no request needed)."""
-    if not media_id:
-        return None
-    try:
-        moment = datetime.fromtimestamp(((int(media_id) >> 23) + 1314220021721) / 1000)
-    except (ValueError, OverflowError, OSError):
-        return None
-    if not 2011 <= moment.year <= datetime.now().year + 1:
-        return None
-    return f"{moment.day} {_MONTHS_TR[moment.month - 1]} {moment.year}"
-
-
-def _instagram_story_meta(url: str) -> str | None:
-    """`@handle · date` footer for a story link; captions are never shown."""
-    match = re.fullmatch(r"/stories/([^/]+)/(\d*)/?", urlsplit(url).path, re.IGNORECASE)
-    if not match or match.group(1).lower() == "highlights":
-        return None
-    username = match.group(1)
-    parts = [f"[@{username}](https://www.instagram.com/{username}/)"]
-    posted = _instagram_date(match.group(2))
-    if posted:
-        parts.append(posted)
-    return " · ".join(parts)
-
-
-def _quote(text: str) -> str:
-    """Bold every caption line inside a blockquote."""
-    return "\n".join("> **" + line + "**" if line else ">" for line in text.splitlines())
-
-
-def media_gallery_view(platform: str, files: list[Path], caption: str | None,
-                       source_url: str, *, part: int = 1,
-                       show_missing_caption: bool = True,
-                       descriptions: list[str] | None = None) -> discord.ui.LayoutView:
-    label = {"instagram": "Instagram", "facebook": "Facebook", "reddit": "Reddit",
-             "tiktok": "TikTok", "youtube": "YouTube", "x": "X", "threads": "Threads",
-             "douyin": "Douyin", "weibo": "Weibo", "streamable": "Streamable",
-             "bluesky": "Bluesky"}[platform]
-    heading = f"### {label} gönderisi" if part == 1 else f"### {label} gönderisi · {part}. bölüm"
-    children: list[discord.ui.Item] = [discord.ui.TextDisplay(heading)]
-    visual = [path for path in files if path.suffix.lower() != ".mp3"]
-    audio = [path for path in files if path.suffix.lower() == ".mp3"]
-    if (platform == "instagram" and part == 1 and len(visual) == 1
-            and visual[0].suffix.lower() in {".mp4", ".mov", ".webm", ".m4v"}
-            and "/reel/" in urlsplit(source_url).path.lower()):
-        view = discord.ui.LayoutView(timeout=None)
-        view.add_item(discord.ui.MediaGallery(
-            discord.MediaGalleryItem(f"attachment://{visual[0].name}")
-        ))
-        details: list[discord.ui.Item] = [
-            discord.ui.TextDisplay("## Instagram Reel"),
-            discord.ui.Separator(),
-        ]
-        body, username, posted = _reel_caption(caption) if caption else ("", None, None)
-        if body:
-            details.append(discord.ui.TextDisplay(_quote(body[:3600])))
-        elif show_missing_caption:
-            details.append(discord.ui.TextDisplay("-# Gönderi açıklamasına erişilemiyor."))
-        meta = " · ".join(part for part in (
-            f"[@{username}](https://www.instagram.com/{username}/)" if username else "",
-            posted or "",
-        ) if part)
-        source = discord.ui.Button(label="Kaynak", emoji="🔗",
-                                   style=discord.ButtonStyle.link, url=source_url)
-        details.append(discord.ui.Section(discord.ui.TextDisplay("-# " + meta), accessory=source)
-                       if meta else discord.ui.ActionRow(source))
-        view.add_item(discord.ui.Container(*details, accent_color=COLORS[platform]))
-        return view
-    if visual:
-        children.append(discord.ui.MediaGallery(*(
-            discord.MediaGalleryItem(
-                f"attachment://{path.name}",
-                description=(descriptions[index][:1024] or None) if descriptions and index < len(descriptions) else None,
-            ) for index, path in enumerate(visual)
-        )))
-    for path in audio:
-        children.append(discord.ui.File(f"attachment://{path.name}"))
-    story_meta = _instagram_story_meta(source_url) if platform == "instagram" else None
-    if caption:
-        children.append(discord.ui.Separator())
-        if platform == "facebook" and caption.rstrip().endswith(("...", "…")):
-            children.append(discord.ui.TextDisplay("-# Açıklama önizlemesi"))
-        children.append(discord.ui.TextDisplay(_quote(caption[:3600])))
-    elif part == 1 and not story_meta and show_missing_caption:
-        children.append(discord.ui.TextDisplay("-# Gönderi açıklamasına erişilemiyor."))
-    source = discord.ui.Button(label="Kaynak", emoji="🔗", style=discord.ButtonStyle.link, url=source_url)
-    if story_meta:
-        children.append(discord.ui.Section(discord.ui.TextDisplay("-# " + story_meta), accessory=source))
-    else:
-        children.append(discord.ui.ActionRow(source))
-    view = discord.ui.LayoutView(timeout=None)
-    view.add_item(discord.ui.Container(*children, accent_color=COLORS[platform]))
-    return view
-
-
-def reddit_embed_preview(link: PostLink, embeds: list[discord.Embed]) -> Preview:
-    """Use Discord's Reddit unfurl when Reddit blocks anonymous requests."""
-    subreddit = re.search(r"/r/([^/]+)", urlsplit(link.url).path, re.IGNORECASE)
-    for embed in embeds:
-        data = embed.to_dict()
-        provider = (data.get("provider") or {}).get("name", "").lower()
-        embed_url = data.get("url") or ""
-        host = (urlsplit(embed_url).hostname or "").lower()
-        if provider != "reddit" and host not in {"reddit.com", "www.reddit.com", "old.reddit.com"}:
-            continue
-        title = data.get("title") or None
-        if subreddit and title:
-            title = f"r/{subreddit.group(1)} · {title}"
-        elif subreddit:
-            title = f"r/{subreddit.group(1)}"
-        description = data.get("description") or None
-        image = (data.get("image") or {}).get("url") or (data.get("thumbnail") or {}).get("url")
-        return Preview(title=title, description=description, image=image)
-    return Preview()
 
 
 def _has_media(post: dict) -> bool:
@@ -306,49 +94,6 @@ Bağlantı gönder: Instagram, Threads, TikTok, X, Facebook, Reddit, YouTube, Sp
 `/metrics` · sağlayıcı metrikleri
 
 Eski `!` komutları da çalışır (`!ayar`, `!ayar thread ac`)."""
-
-
-class InteractionMessage:
-    """Message-like adapter so prefix handlers can serve slash commands too."""
-
-    def __init__(self, interaction: discord.Interaction, *, mentions: list | None = None):
-        self.interaction = interaction
-        self.author = interaction.user
-        self.guild = interaction.guild
-        self.channel = interaction.channel
-        self.id = interaction.id
-        self.mentions = mentions or []
-
-    async def reply(self, content: str = "", **kwargs):
-        # Interaction responses do not support message-only options.
-        kwargs.pop("mention_author", None)
-        kwargs.pop("suppress_embeds", None)
-        if self.interaction.response.is_done():
-            return await self.interaction.followup.send(content=content or None, **kwargs)
-        return await self.interaction.response.send_message(content=content or None, **kwargs)
-
-
-class ThreadMessage:
-    """Message-like adapter that sends every reply into an auto-created thread."""
-
-    def __init__(self, original, thread):
-        self.original = original
-        self.thread = thread
-
-    def __getattr__(self, name):
-        return getattr(self.original, name)
-
-    @property
-    def channel(self):
-        return self.thread
-
-    async def reply(self, content: str = "", *, files=None, embed=None, view=None,
-                    mention_author: bool = False, suppress_embeds: bool = False, **kwargs):
-        return await self.thread.send(
-            content=(content or None), files=files or [], embed=embed, view=view,
-            suppress_embeds=suppress_embeds, **kwargs,
-        )
-
 
 class MediaBot(discord.Client):
     def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None):
@@ -408,124 +153,7 @@ class MediaBot(discord.Client):
         return True
 
     def _register_commands(self) -> None:
-        tree = discord.app_commands.CommandTree(self)
-
-        async def run_existing(interaction: discord.Interaction, method, argument: str = "") -> None:
-            locale = i18n.locale_code(interaction)
-            if not self._command_allowed(interaction):
-                await interaction.response.send_message(i18n.t("cooldown", locale), ephemeral=True)
-                return
-            await interaction.response.defer()
-            try:
-                if argument:
-                    await method(InteractionMessage(interaction), argument)
-                else:
-                    await method(InteractionMessage(interaction))
-            except Exception:
-                LOG.exception("Slash komutu başarısız: %s", interaction.command)
-                try:
-                    await interaction.followup.send(i18n.t("command_failed", locale))
-                except discord.HTTPException:
-                    pass
-
-        @tree.command(name="yardim", description="Bot komutlarını ve desteklenen platformları göster / Show bot help")
-        async def yardim(interaction: discord.Interaction) -> None:
-            locale = i18n.locale_code(interaction)
-            await interaction.response.send_message(i18n.help_text(locale), ephemeral=True)
-
-        @tree.command(name="metrics", description="Sağlayıcı ve highlight metriklerini göster")
-        async def metrics(interaction: discord.Interaction) -> None:
-            await run_existing(interaction, self._reply_metrics)
-
-        @tree.command(name="stats", description="İşlem istatistikleri (yalnızca sahip)")
-        @discord.app_commands.describe(aralik="24s, 7g veya 30g", platform="instagram, youtube, tiktok…")
-        async def stats(interaction: discord.Interaction, aralik: str = "", platform: str = "") -> None:
-            if not await self._owner_command(interaction):
-                return
-            await run_existing(interaction, self._reply_request_stats, f"{aralik} {platform}".strip())
-
-        @tree.command(name="info", description="Kendi işlem özetin / Your request summary")
-        @discord.app_commands.describe(kullanici="Başka bir kullanıcı (yalnızca sahip)", aralik="24s, 7g veya 30g")
-        async def info(interaction: discord.Interaction, kullanici: discord.Member | None = None, aralik: str = "") -> None:
-            locale = i18n.locale_code(interaction)
-            if kullanici and interaction.user.id != self.owner_id:
-                await interaction.response.send_message(i18n.t("info_other_owner_only", locale), ephemeral=True)
-                return
-            if not self._command_allowed(interaction):
-                await interaction.response.send_message(i18n.t("cooldown", locale), ephemeral=True)
-                return
-            await interaction.response.defer()
-            adapter = InteractionMessage(interaction, mentions=[kullanici] if kullanici else [])
-            await self._reply_user_info(adapter, aralik)
-
-        @tree.command(name="cache", description="Medya ve highlight önbelleği durumu")
-        async def cache(interaction: discord.Interaction) -> None:
-            await run_existing(interaction, self._reply_cache)
-
-        @tree.command(name="cachetemizle", description="Önbellekleri temizle (yalnızca sahip)")
-        async def cache_clear(interaction: discord.Interaction) -> None:
-            if not await self._owner_command(interaction):
-                return
-            await run_existing(interaction, self._reply_cache_clear)
-
-        @tree.command(name="hatalar", description="Son hatalar (yalnızca sahip)")
-        @discord.app_commands.describe(aralik="24s, 7g veya 30g")
-        async def errors(interaction: discord.Interaction, aralik: str = "") -> None:
-            if not await self._owner_command(interaction):
-                return
-            await run_existing(interaction, self._reply_errors, aralik)
-
-        @tree.command(name="bakim", description="Bakım modu (yalnızca sahip)")
-        @discord.app_commands.describe(durum="ac veya kapat; boş bırakılırsa durumu gösterir")
-        async def maintenance(interaction: discord.Interaction, durum: str = "") -> None:
-            if not await self._owner_command(interaction):
-                return
-            await run_existing(interaction, self._reply_maintenance, durum)
-
-        @tree.command(name="ayar", description="Sunucu ayarlarını göster veya değiştir / View or change server settings")
-        @discord.app_commands.describe(
-            otomatik_thread="Bağlantılar için otomatik thread açılsın mı? / Auto-create thread for media links",
-            youtube="YouTube varsayılan kalite / Default YouTube quality",
-        )
-        @discord.app_commands.choices(youtube=[
-            discord.app_commands.Choice(name="Her zaman sor / Always ask", value="sor"),
-            discord.app_commands.Choice(name="MP3 (ses / audio)", value="mp3"),
-            discord.app_commands.Choice(name="360p", value="360"),
-            discord.app_commands.Choice(name="720p", value="720"),
-            discord.app_commands.Choice(name="1080p", value="1080"),
-        ])
-        async def ayar(interaction: discord.Interaction,
-                       otomatik_thread: bool | None = None,
-                       youtube: discord.app_commands.Choice[str] | None = None) -> None:
-            locale = i18n.locale_code(interaction)
-            guild = interaction.guild
-            if guild is None:
-                await interaction.response.send_message(i18n.t("guild_only", locale), ephemeral=True)
-                return
-            permissions = getattr(interaction.user, "guild_permissions", None)
-            if not (permissions and permissions.manage_guild) and interaction.user.id != self.owner_id:
-                await interaction.response.send_message(i18n.t("manage_guild_required", locale), ephemeral=True)
-                return
-            changed = otomatik_thread is not None or youtube is not None
-            try:
-                if changed:
-                    settings = SETTINGS.update(
-                        guild.id,
-                        auto_thread=otomatik_thread,
-                        youtube_quality=youtube.value if youtube else None,
-                    )
-                else:
-                    settings = SETTINGS.get(guild.id)
-            except ValueError:
-                await interaction.response.send_message(i18n.t("invalid_quality", locale), ephemeral=True)
-                return
-            await interaction.response.send_message(
-                i18n.settings_message(settings, locale, updated=changed),
-                ephemeral=True,
-            )
-
-        self.tree = tree
-
+        register_commands(self)
     async def close(self) -> None:
         for task in (self._health_task, self._backup_task):
             if task and not task.done():
@@ -568,6 +196,7 @@ class MediaBot(discord.Client):
             ready = self.is_ready()
         except (AttributeError, RuntimeError):
             ready = False
+        cache = MEDIA_CACHE.stats()
         return {
             "status": "ok" if ready else "starting",
             "uptime_seconds": int(time.time() - self.started_at),
@@ -579,6 +208,14 @@ class MediaBot(discord.Client):
             "cobalt": bool(self.cobalt_url),
             "maintenance": MAINTENANCE.active,
             "cookies": {key: cookies[key] for key in ("total", "expired", "expiring", "netscape")},
+            "cache": {
+                "enabled": cache.get("enabled"),
+                "entries": cache.get("entries", 0),
+                "bytes": cache.get("bytes", 0),
+                "hits": cache.get("hits", 0),
+                "misses": cache.get("misses", 0),
+                "stores": cache.get("stores", 0),
+            },
         }
 
     async def _warn_cookie_expiry(self) -> None:
@@ -736,7 +373,7 @@ class MediaBot(discord.Client):
         if not self._can_manage_guild(getattr(message, "author", None)):
             await self._reply(message, "Bu komut için **Sunucuyu yönet** izni gerekir.")
             return
-        usage = ("Kullanım: `!ayar` · `!ayar thread ac|kapat` · "
+        usage = ("Kullanım: `!ayar` · `!ayar thread ac|kapat` · `!ayar yanit ac|kapat` · "
                  "`!ayar youtube sor|mp3|360|720|1080` · `!ayar sifirla`")
         tokens = argument.split()
         changes: dict = {}
@@ -762,8 +399,21 @@ class MediaBot(discord.Client):
                     return
                 changes["youtube_quality"] = tokens[index + 1]
                 index += 2
+            elif token in {"yanit", "yanıt", "yanitla", "reply", "cevapla"}:
+                if index + 1 >= len(tokens):
+                    await self._reply(message, usage)
+                    return
+                value = tokens[index + 1].lower()
+                if value in {"ac", "aç", "on", "1", "evet"}:
+                    changes["reply_messages"] = True
+                elif value in {"kapat", "off", "0", "hayir", "hayır"}:
+                    changes["reply_messages"] = False
+                else:
+                    await self._reply(message, usage)
+                    return
+                index += 2
             elif token in {"sifirla", "sıfırla", "reset"}:
-                changes.update(auto_thread=False, youtube_quality="sor")
+                changes.update(auto_thread=False, youtube_quality="sor", reply_messages=True)
                 index += 1
             else:
                 await self._reply(message, usage)
@@ -857,11 +507,17 @@ class MediaBot(discord.Client):
             return f"{seconds / 60:g} dk"
 
         media = MEDIA_CACHE.stats()
+        hits = media.get("hits", 0)
+        misses = media.get("misses", 0)
+        stores = media.get("stores", 0)
+        lookups = hits + misses
+        hit_rate = (f"{(hits / lookups) * 100:.0f}%" if lookups else "—")
         lines = [
             "📦 Önbellek durumu",
             f"Genel medya: {'açık' if media['enabled'] else 'kapalı'} · "
             f"{media['entries']} kayıt · {media['files']} dosya · {_human_bytes(media['bytes'])} "
             f"(sınır {_human_bytes(media['max_bytes'])}, TTL {ttl_text(media['ttl'])})",
+            f"İsabet/kaçırma: {hits}/{misses} (oran {hit_rate}) · kayıt ekleme: {stores}",
         ]
         if media["stale"]:
             lines.append(f"♻️ Temizlenmeyi bekleyen eski kayıt: {media['stale']}")
@@ -1081,12 +737,12 @@ class MediaBot(discord.Client):
                         )
                         if pending_target is not None and record_id:
                             pending_target.request_id = record_id
-                    if outcome == "failure" and detail != "forbidden" and hasattr(message, "reply"):
+                    if outcome == "failure" and detail != "forbidden":
                         try:
-                            await message.reply(
+                            await self._reply(
+                                message,
                                 "↩️ İşlem başarısız oldu. Tekrar denemek için:",
                                 view=RetryView(bot=self, source_message=message, link=link),
-                                mention_author=False,
                             )
                         except discord.HTTPException:
                             pass
@@ -1138,8 +794,25 @@ class MediaBot(discord.Client):
                 attachment = discord.File(path, filename=path.name)
                 stack.callback(attachment.close)
                 attachments.append(attachment)
-            return await message.reply(content=content[:1900] or None, files=attachments, embed=embed, view=view,
-                                       mention_author=False, suppress_embeds=embed is None)
+            use_reply = True
+            if isinstance(message, discord.Message):
+                guild = getattr(message, "guild", None)
+                if guild is not None:
+                    try:
+                        use_reply = SETTINGS.get(guild.id).reply_messages
+                    except Exception:
+                        use_reply = True
+            content_out = content[:1900] or None
+            if use_reply:
+                return await message.reply(content=content_out, files=attachments, embed=embed, view=view,
+                                           mention_author=False, suppress_embeds=embed is None)
+            channel = getattr(message, "channel", None)
+            send = getattr(channel, "send", None) if channel is not None else None
+            if send is None:
+                return await message.reply(content=content_out, files=attachments, embed=embed, view=view,
+                                           mention_author=False, suppress_embeds=embed is None)
+            return await send(content=content_out, files=attachments, embed=embed, view=view,
+                              suppress_embeds=embed is None)
 
     async def _fit_attachments(self, files: list[Path], message: object) -> list[Path] | None:
         """Reencode oversized videos after a 413 so one retry can succeed."""
@@ -1701,88 +1374,8 @@ class MediaBot(discord.Client):
 
 
 def main() -> None:
-    load_dotenv()
-    _configure_logging()
-    token = os.getenv("DISCORD_TOKEN", "").strip()
-    if not token:
-        raise SystemExit("DISCORD_TOKEN .env dosyasında tanımlanmalı.")
-    channels_raw = os.getenv("CHANNEL_IDS", "").strip()
-    try:
-        channels = {int(part.strip()) for part in channels_raw.split(",") if part.strip()}
-        cookie_raw = os.getenv("COOKIE_FILE", "").strip()
-        cookie_file = Path(cookie_raw).resolve() if cookie_raw else None
-        if cookie_file and not cookie_file.is_file():
-            raise ValueError("COOKIE_FILE mevcut bir dosyayı göstermeli")
-        cobalt_url = os.getenv("COBALT_API_URL", "").strip() or None
-        if cobalt_url:
-            from urllib.parse import urlsplit
-            parsed = urlsplit(cobalt_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
-                raise ValueError("COBALT_API_URL örneği: http://127.0.0.1:9000/")
-        rs_raw = os.getenv("GALLERY_DL_RS_PATH", "").strip()
-        gallery_rs_path = Path(rs_raw).resolve() if rs_raw else None
-        if gallery_rs_path and not gallery_rs_path.is_file():
-            raise ValueError("GALLERY_DL_RS_PATH mevcut bir programı göstermeli")
-        database_path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).resolve()
-        _prepare_temp_dir(database_path.parent / "tmp")
-        METRICS.configure(database_path.with_name("provider_metrics.sqlite3"))
-        SETTINGS.configure(database_path.with_name("guild_settings.sqlite3"))
-        REQUESTS.configure(
-            database_path.with_name("request_log.sqlite3"),
-            retention_days=_positive_int("REQUEST_LOG_RETENTION_DAYS", 30, 3650),
-            store_url=os.getenv("REQUEST_LOG_STORE_URL", "1").strip().lower()
-            not in {"0", "false", "no", "off", "hayir", "hayır"},
-        )
-        MAINTENANCE.configure(
-            database_path.parent / "maintenance.json",
-            enabled=env_enabled("MAINTENANCE_MODE"),
-            message=os.getenv("MAINTENANCE_MESSAGE", ""),
-        )
-        MEDIA_CACHE.configure(
-            database_path.parent / "media_cache",
-            ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 360, 10080) * 60,
-            max_bytes=_positive_int("MEDIA_CACHE_MAX_MB", 1024, 10240) * 1024 * 1024,
-        )
-        HIGHLIGHTS.configure(
-            database_path,
-            cache_ttl=_positive_int("HIGHLIGHT_CACHE_TTL_HOURS", 12, 168) * 3600,
-            cache_max_bytes=_positive_int("HIGHLIGHT_CACHE_MAX_MB", 512, 4096) * 1024 * 1024,
-            daily_limit=_positive_int("HIGHLIGHT_DAILY_LIMIT", 15, 200),
-            hourly_limit=_positive_int("HIGHLIGHT_HOURLY_LIMIT", 4, 50),
-            health_check_enabled=os.getenv("HIGHLIGHT_HEALTHCHECK_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"},
-            health_check_interval=_positive_int("HIGHLIGHT_HEALTHCHECK_HOURS", 24, 168) * 3600,
-            health_check_reserve=_positive_int("HIGHLIGHT_HEALTHCHECK_RESERVE", 3, 20),
-        )
-        bot = MediaBot(
-            channel_ids=channels,
-            upload_bytes=_bounded_int("MAX_UPLOAD_MB", 0, 0, 500) * 1024 * 1024,
-            max_links=_positive_int("MAX_LINKS_PER_MESSAGE", 3, 10),
-            concurrency=_positive_int("MAX_CONCURRENT_JOBS", 2, 10),
-            command_guild_id=_bounded_int("COMMAND_GUILD_ID", 0, 0, 2**63 - 1) or None,
-            cookie_file=cookie_file,
-            cobalt_url=cobalt_url,
-            cobalt_key=os.getenv("COBALT_API_KEY", "").strip() or None,
-            gallery_rs_path=gallery_rs_path,
-            database_path=database_path,
-        )
-    except ValueError as exc:
-        raise SystemExit(f"Yapılandırma hatası: {exc}") from exc
-    if sys.platform != "win32":
-        try:
-            import uvloop
-        except ImportError:
-            pass
-        else:
-            if hasattr(uvloop, "install"):
-                uvloop.install()
-    try:
-        bot.run(token, log_handler=None)
-    except discord.PrivilegedIntentsRequired:
-        raise SystemExit(
-            "Discord, Message Content Intent erişimini reddetti. "
-            "Discord Developer Portal > uygulamanız > Bot > Privileged Gateway Intents "
-            "bölümünde Message Content Intent'i açıp kaydedin; sonra botu yeniden başlatın."
-        ) from None
+    from .bot_entrypoint import main as _main
+    _main()
 
 
 if __name__ == "__main__":

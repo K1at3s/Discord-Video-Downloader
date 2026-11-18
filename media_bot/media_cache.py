@@ -35,6 +35,9 @@ class MediaCache:
         self._inflight: dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
         self._enabled = root is not None
+        self.hits = 0
+        self.misses = 0
+        self.stores = 0
 
     @property
     def enabled(self) -> bool:
@@ -100,17 +103,21 @@ class MediaCache:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
+            self.misses += 1
             return None
         created = float(meta.get("created_at", 0))
         if time.time() - created > self.ttl:
             shutil.rmtree(base, ignore_errors=True)
+            self.misses += 1
             return None
         provider = str(meta.get("provider") or "cache")
         files = [str(f) for f in meta.get("files", []) if isinstance(f, str)]
         resolved = [name for name in files if (base / name).is_file()]
         if not resolved:
             shutil.rmtree(base, ignore_errors=True)
+            self.misses += 1
             return None
+        self.hits += 1
         return CacheEntry(path=base, files=resolved, provider=provider, created_at=created)
 
     def put(self, platform: str, url: str, cookie: bool, provider: str, source_files: list[Path], variant: str = "") -> CacheEntry | None:
@@ -135,6 +142,7 @@ class MediaCache:
                 return None
             meta = {"created_at": time.time(), "files": names, "provider": provider}
             (base / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+            self.stores += 1
             self.cleanup()
             return CacheEntry(path=base, files=names, provider=provider, created_at=meta["created_at"])
         except OSError as exc:
@@ -142,6 +150,7 @@ class MediaCache:
             return None
 
     def stats(self) -> dict:
+        lookups = self.hits + self.misses
         out = {
             "enabled": self.enabled,
             "entries": 0,
@@ -151,6 +160,10 @@ class MediaCache:
             "max_bytes": self.max_bytes,
             "ttl": self.ttl,
             "path": str(self.root) if self.root is not None else None,
+            "hits": self.hits,
+            "misses": self.misses,
+            "stores": self.stores,
+            "hit_rate": (self.hits / lookups) if lookups else 0.0,
         }
         if not self.root or not self.root.exists():
             return out

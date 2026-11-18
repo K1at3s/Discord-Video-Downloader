@@ -21,6 +21,7 @@ DEFAULTS = {"auto_thread": False, "youtube_quality": "sor"}
 class GuildSettings:
     auto_thread: bool = False
     youtube_quality: str = "sor"
+    reply_messages: bool = True
 
 
 class GuildSettingsStore:
@@ -44,8 +45,12 @@ class GuildSettingsStore:
                 "guild_id INTEGER PRIMARY KEY, "
                 "auto_thread INTEGER NOT NULL DEFAULT 0, "
                 "youtube_quality TEXT NOT NULL DEFAULT 'sor', "
+                "reply_messages INTEGER NOT NULL DEFAULT 1, "
                 "updated_at INTEGER NOT NULL DEFAULT 0)"
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(guild_settings)")}
+            if "reply_messages" not in columns:
+                db.execute("ALTER TABLE guild_settings ADD COLUMN reply_messages INTEGER NOT NULL DEFAULT 1")
 
     def get(self, guild_id: int) -> GuildSettings:
         if self.path is None or not guild_id:
@@ -53,7 +58,7 @@ class GuildSettingsStore:
         try:
             with self._lock, closing(open_db(self.path)) as db:
                 row = db.execute(
-                    "SELECT auto_thread, youtube_quality FROM guild_settings WHERE guild_id = ?",
+                    "SELECT auto_thread, youtube_quality, reply_messages FROM guild_settings WHERE guild_id = ?",
                     (guild_id,),
                 ).fetchone()
         except Exception as exc:
@@ -62,7 +67,8 @@ class GuildSettingsStore:
         if not row:
             return GuildSettings()
         quality = row[1] if row[1] in QUALITY_CHOICES else "sor"
-        return GuildSettings(auto_thread=bool(row[0]), youtube_quality=quality)
+        reply_messages = True if row[2] is None else bool(row[2])
+        return GuildSettings(auto_thread=bool(row[0]), youtube_quality=quality, reply_messages=reply_messages)
 
     def update(self, guild_id: int, **fields) -> GuildSettings:
         """Validate and persist a partial change, returning the new settings."""
@@ -75,6 +81,8 @@ class GuildSettingsStore:
             if quality not in QUALITY_CHOICES:
                 raise ValueError(f"Geçersiz kalite: {quality}")
             changes["youtube_quality"] = quality
+        if "reply_messages" in fields and fields["reply_messages"] is not None:
+            changes["reply_messages"] = bool(fields["reply_messages"])
         if not changes:
             return current
         updated = replace(current, **changes)
@@ -82,12 +90,13 @@ class GuildSettingsStore:
             try:
                 with self._lock, closing(open_db(self.path)) as db, db:
                     db.execute(
-                        "INSERT INTO guild_settings (guild_id, auto_thread, youtube_quality, updated_at) "
-                        "VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
+                        "INSERT INTO guild_settings (guild_id, auto_thread, youtube_quality, reply_messages, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
                         "auto_thread = excluded.auto_thread, "
                         "youtube_quality = excluded.youtube_quality, "
+                        "reply_messages = excluded.reply_messages, "
                         "updated_at = excluded.updated_at",
-                        (guild_id, int(updated.auto_thread), updated.youtube_quality, int(time.time())),
+                        (guild_id, int(updated.auto_thread), updated.youtube_quality, int(updated.reply_messages), int(time.time())),
                     )
             except Exception as exc:
                 LOG.warning("Sunucu ayarları yazılamadı: %s", exc)
@@ -100,5 +109,7 @@ SETTINGS = GuildSettingsStore()
 
 def describe(settings: GuildSettings) -> str:
     thread = "açık" if settings.auto_thread else "kapalı"
+    reply = "açık" if settings.reply_messages else "kapalı"
     return (f"🧵 Otomatik thread: **{thread}**\n"
-            f"🎬 YouTube varsayılanı: **{settings.youtube_quality}**")
+            f"🎬 YouTube varsayılanı: **{settings.youtube_quality}**\n"
+            f"↩️ Mesaja yanıt (reply): **{reply}**")

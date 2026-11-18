@@ -884,7 +884,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         if partial:
             return await _success(partial[0], partial[1])
         if oversize:
-            raise DownloadError("Medya Discord yükleme sınırını aşıyor.")
+            raise DownloadError("Medya Discord yükleme sınırını aşıyor. Daha düşük kalite seçmeyi deneyin veya dosyayı küçültün.")
         if bot_check and link.platform == "youtube":
             raise DownloadError(
                 "YouTube bu isteği otomatik trafik olarak işaretledi (bot doğrulaması). "
@@ -892,24 +892,28 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 "olarak ayarlayıp botu yeniden başlatın."
             )
         if private:
-            raise DownloadError("Bu hesap gizli veya oturum gerektiriyor; medya indirilemedi. Erişim hakkınız varsa COOKIE_FILE ayarlayın.")
+            raise DownloadError("Bu içerik gizli veya oturum gerektiriyor; medya indirilemedi. Erişim hakkınız varsa güncel COOKIE_FILE ayarlayın.")
         if rate_limited and link.platform == "instagram":
             wait = HIGHLIGHTS.bucket.wait_seconds() if HIGHLIGHTS.enabled else 0
             if wait > 0:
-                raise DownloadError(f"Instagram indirme kotası/sınırı aşıldı (indown.io). Yaklaşık {format_wait(wait)} sonra tekrar dene.")
+                raise DownloadError(f"Instagram indirme kotası/sınırı aşıldı. Yaklaşık {format_wait(wait)} sonra tekrar dene.")
             raise DownloadError("Instagram görüntüleyicisi saatlik istek sınırına takıldı. Bir süre sonra tekrar dene.")
         if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
             # threads.com answers these short links with a /login/ redirect unless a
             # valid session cookie is configured, so no provider can see the post.
-            raise DownloadError("Threads paylaşım bağlantısı oturum olmadan açılamıyor. COOKIE_FILE ayarlayın veya gönderiyi tarayıcıda açıp /@kullanıcı/post/... bağlantısını paylaşın.")
+            raise DownloadError("Threads paylaşım bağlantısı oturum olmadan çözülemedi. COOKIE_FILE ayarlayın veya gönderinin tam /@kullanıcı/post/... bağlantısını paylaşın.")
         detail = ", ".join(failures[:6])
         if bot_check:
             raise DownloadError(
                 f"Sağlayıcılar oturum/bot doğrulaması istedi. Güncel COOKIE_FILE deneyin. (denenen: {detail})"
             )
         if failures:
-            raise DownloadError(f"Bu gönderiden medya alınamadı. Gönderi kaldırılmış, özel/giriş gerektiriyor ya da sağlayıcılar geçici olarak yanıt vermiyor olabilir. (denenen: {detail})")
-        raise DownloadError("Bu gönderiden medya alınamadı. Gönderi kaldırılmış, özel/giriş gerektiriyor ya da sağlayıcılar geçici olarak yanıt vermiyor olabilir.")
+            raise DownloadError(
+                "Bu gönderiden medya alınamadı. Gönderi silinmiş/özel olabilir, giriş gerekebilir "
+                "ya da sağlayıcılar geçici olarak yanıt vermiyor olabilir. "
+                f"(denenen: {detail})"
+            )
+        raise DownloadError("Bu gönderiden medya alınamadı. Gönderi silinmiş/özel olabilir veya sağlayıcılar geçici olarak yanıt vermiyor olabilir.")
     except Exception as exc:
         await _finish(None, exc)
         raise
