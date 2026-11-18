@@ -21,7 +21,7 @@ Discord sohbetindeki sosyal medya bağlantılarını algılayıp medyayı ve eri
 
 Profil, arama, tüm albüm ve oynatma listesi bağlantıları topluca indirilmez. Özel gönderiler, oturum isteyen içerikler ve bölgesel engeller başarısız olabilir.
 
-![X kartı örneği](card-preview.png)
+![Yeni medya kartı tasarımı önizlemesi](card-preview.png)
 
 ## Gereksinimler
 
@@ -166,26 +166,23 @@ Reddit'in +18 durumu doğrulanamazsa bağlantı işlenmez. Bu denetim **Reddit'e
 
 | Yol | Görevi |
 | --- | --- |
-| `media_bot/bot.py` | Discord olayları, mesaj akışı, Components V2, yapılandırma |
+| `media_bot/bot.py` | `MediaBot` çekirdeği, başlatma/health/yaşam döngüsü, uyumluluk re-export’ları |
+| `media_bot/bot_orchestration_mixin.py` | Mesaj orkestrasyonu (`on_message`), kuyruk/işleme akışı, `_reply` yardımcıları |
+| `media_bot/bot_commands_mixin.py` | Yönetim/ayar/istatistik komut yanıtları ve yardımcıları |
+| `media_bot/bot_link_handlers_mixin.py` | Platform/link işleyicileri ve medya teslim akışları |
+| `media_bot/bot_slash_commands.py`, `media_bot/bot_entrypoint.py`, `media_bot/bot_runtime.py` | Slash komut kaydı, giriş noktası ve çalışma zamanı yardımcıları |
+| `media_bot/discord_support.py`, `media_bot/i18n.py` | Components V2/UI yardımcıları, adaptörler ve yerelleştirme |
 | `media_bot/links.py` | Bağlantı tanıma ve normalleştirme |
-| `media_bot/download.py`, `race.py`, `circuit_breaker.py` | Sağlayıcı sırası, indirme yarışı ve arızalı sağlayıcıyı geçici atlama |
+| `media_bot/download.py`, `race.py`, `circuit_breaker.py`, `provider_memory.py` | Sağlayıcı seçimi, indirme yarışı, öğrenme ve arıza soğuması |
 | `media_bot/direct_providers.py`, `web_providers.py`, `cobalt.py`, `gendownload.py`, `indownio.py` | İndirme sağlayıcıları |
-| `media_bot/youtube.py`, `youtube_view.py`, `spotify.py` | YouTube seçenekleri ve Spotify eşleştirmesi |
-| `media_bot/reddit_post.py`, `reddit_card.py`, `adult.py` | Reddit metni/kartları ve +18 kotası |
-| `media_bot/x_card.py`, `x_story.py` | Tweet verisi ve görseli |
-| `media_bot/bluesky.py` | Resmî Bluesky API’si, görseller ve HLS video |
-| `media_bot/captions.py`, `metadata_fallback.py`, `limits.py` | Açıklama, önizleme, dosya sınırları |
-| `media_bot/provider_metrics.py` | Sağlayıcı denemelerinin yerel 24 saatlik özeti |
-| `media_bot/request_log.py` | Sunucu/kullanıcı/link bazlı işlem kayıtları ve başarı yüzdesi özeti |
-| `media_bot/http.py`, `sqlite_util.py` | Paylaşılan HTTP bağlantı havuzu ve WAL ayarlı SQLite bağlantıları |
-| `media_bot/job_slots.py` | Toplam ve kullanıcı başına eşzamanlılık sınırı |
-| `media_bot/health.py` | `/healthz` için stdlib HTTP sunucusu |
-| `media_bot/backup.py` | Günlük SQLite yedekleri ve eski klasörlerin temizliği |
-| `media_bot/cookiefile.py` | Çerez biçimi/son kullanma raporu ve Netscape kontrolü |
-| `scripts/defender-exclusions.ps1` | Windows Defender istisnaları (yönetici olarak çalıştırılır) |
-| `scripts/install-autostart.ps1`, `run-bot-loop.ps1` | Açılışta otomatik başlatma ve çökme sonrası yeniden deneme |
-| `scripts/benchmark.py` | Sabit link listesiyle sağlayıcı/süre ölçüm raporu |
-| `tests/` | Birim ve akış testleri |
+| `media_bot/youtube.py`, `youtube_view.py`, `spotify.py` | YouTube seçenekleri/teslimi ve Spotify eşleştirmesi |
+| `media_bot/reddit_post.py`, `reddit_card.py`, `x_card.py`, `x_story.py`, `bluesky.py` | Platforma özel içerik, kart ve API işleme |
+| `media_bot/captions.py`, `metadata_fallback.py`, `limits.py`, `video_fit.py` | Açıklama, önizleme, boyut/sınır ve video uyarlama |
+| `media_bot/media_cache.py`, `highlight_state.py`, `maintenance.py`, `guild_settings.py` | Önbellek, highlight/kota durumu, bakım modu ve sunucu ayarları |
+| `media_bot/provider_metrics.py`, `request_log.py` | Sağlayıcı metrikleri ve işlem kayıtları |
+| `media_bot/http.py`, `sqlite_util.py`, `job_slots.py`, `cooldowns.py` | HTTP/SQLite yardımcıları, eşzamanlılık ve komut soğuması |
+| `media_bot/health.py`, `backup.py`, `cookiefile.py`, `retry_view.py` | Sağlık uç noktası, yedekleme, çerez kontrolü ve tekrar dene UI |
+| `scripts/`, `tests/` | Yardımcı betikler ve testler |
 
 Firefox eklentisi ayrı bir yerel çalışma klasörüdür; `.gitignore` içinde tutulur ve bu repoya dahil edilmez.
 
