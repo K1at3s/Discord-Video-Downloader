@@ -132,13 +132,23 @@ def _badge(draw: ImageDraw.ImageDraw, x: int, y: int, size: int) -> None:
     points = []
     for index in range(16):
         angle = index * math.pi / 8 - math.pi / 2
-        radius = size * (0.49 if index % 2 == 0 else 0.42)
+        radius = size * (0.48 if index % 2 == 0 else 0.43)
         points.append((x + center + math.cos(angle) * radius,
                        y + center + math.sin(angle) * radius))
     draw.polygon(points, fill=BLUE)
-    draw.line((x + size * 0.27, y + size * 0.51,
+    stroke = max(2, round(size * 0.14))
+    draw.line((x + size * 0.28, y + size * 0.52,
                x + size * 0.43, y + size * 0.66,
-               x + size * 0.74, y + size * 0.34), fill="white", width=max(2, size // 9), joint="curve")
+               x + size * 0.72, y + size * 0.36), fill="white", width=stroke, joint="curve")
+
+
+def _badge_for_text(draw: ImageDraw.ImageDraw, x: int, text_y: int, font: ImageFont.ImageFont,
+                    scale: float = 0.62) -> None:
+    bbox = draw.textbbox((0, 0), "Ag", font=font)
+    text_h = bbox[3] - bbox[1]
+    size = max(16, int(getattr(font, "size", 28) * scale))
+    badge_y = int(text_y + (text_h - size) / 2 + bbox[1])
+    _badge(draw, int(x), badge_y, size)
 
 
 def _avatar(draw: ImageDraw.ImageDraw, image: Image.Image, avatar: Image.Image | None,
@@ -193,7 +203,7 @@ def _draw_quote(draw: ImageDraw.ImageDraw, image: Image.Image, node: dict,
     name = _fit(draw, name, name_font, width - avatar_size - 110)
     name_end = _draw_mixed(draw, (name_x, y + 15), name, name_font, TEXT)
     if author.get("verified") is True:
-        _badge(draw, name_end + 6, y + 20, 24 if level == 1 else 20)
+        _badge_for_text(draw, name_end + 8, y + 15, name_font, scale=0.58 if level == 1 else 0.56)
     draw.text((name_x, y + (47 if level == 1 else 40)), "@" + handle if handle else "X",
               font=handle_font, fill=MUTED)
     lines = _quote_lines(draw, node, level, width)
@@ -333,7 +343,7 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     name = _fit(draw, name, name_font, 650)
     name_end = _draw_mixed(draw, (216, name_y), name, name_font, TEXT)
     if author.get("verified") is True:
-        _badge(draw, name_end + 10, name_y + 6, 28)
+        _badge_for_text(draw, name_end + 10, name_y, name_font, scale=0.60)
     draw.text((216, handle_y), "@" + handle if handle else "X", font=handle_font, fill=MUTED)
     cx1, cy1, cx2, cy2 = 925, card_top + 59, 989, card_top + 123
     draw.ellipse((cx1, cy1, cx2, cy2), fill="#122734", outline="#6cbfc5", width=2)
