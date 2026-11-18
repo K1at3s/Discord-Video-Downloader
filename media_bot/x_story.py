@@ -206,7 +206,7 @@ def _draw_quote(draw: ImageDraw.ImageDraw, image: Image.Image, node: dict,
     name = _fit(draw, name, name_font, width - avatar_size - 110)
     name_end = _draw_mixed(draw, (name_x, y + 15), name, name_font, TEXT)
     if author.get("verified") is True:
-        _badge_for_text(draw, name_end + 8, y + 15, name_font, scale=0.80 if level == 1 else 0.74, y_offset=-1)
+        _badge_for_text(draw, name_end + 8, y + 15, name_font, scale=0.86 if level == 1 else 0.80, y_offset=-3 if level == 1 else -2)
     draw.text((name_x, y + (47 if level == 1 else 40)), "@" + handle if handle else "X",
               font=handle_font, fill=MUTED)
     lines = _quote_lines(draw, node, level, width)
@@ -346,7 +346,7 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     name = _fit(draw, name, name_font, 650)
     name_end = _draw_mixed(draw, (216, name_y), name, name_font, TEXT)
     if author.get("verified") is True:
-        _badge_for_text(draw, name_end + 10, name_y, name_font, scale=0.86, y_offset=-2)
+        _badge_for_text(draw, name_end + 10, name_y, name_font, scale=0.92, y_offset=-4)
     draw.text((216, handle_y), "@" + handle if handle else "X", font=handle_font, fill=MUTED)
     cx1, cy1, cx2, cy2 = 925, card_top + 59, 989, card_top + 123
     draw.ellipse((cx1, cy1, cx2, cy2), fill="#122734", outline="#6cbfc5", width=2)
