@@ -66,15 +66,33 @@ def _count(value: object) -> str:
         number = int(value or 0)
     except (ValueError, TypeError):
         return "—"
-    if number >= 1_000_000:
-        return f"{number / 1_000_000:.1f}M"
-    if number >= 100_000:
-        return f"{number / 1_000:.1f}K"
-    return f"{number:,}".replace(",", ".")
+    if number < 1_000:
+        return str(number)
+
+    millions = number / 1_000_000
+    if millions >= 1:
+        rounded_m = round(millions)
+        if abs(millions - rounded_m) < 0.05 or millions >= 100:
+            label = f"{int(rounded_m)}M"
+        else:
+            label = f"{millions:.1f}".rstrip("0").rstrip(".") + "M"
+        return label
+
+    rounded_k = round(number / 1_000)
+    if rounded_k >= 1_000:
+        return "1M"
+    return f"{int(rounded_k)}K"
 
 
 def _metric(value: object) -> int | None:
     if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, dict):
+        for key in ("count", "value", "view_count", "views"):
+            if key in value:
+                metric = _metric(value.get(key))
+                if metric is not None:
+                    return metric
         return None
     if isinstance(value, str):
         value = value.strip().replace(",", "")
@@ -165,14 +183,14 @@ def normalize_syndication(data: dict, *, depth: int = 0) -> dict | None:
         "replies": _first_metric(data.get("conversation_count"), data.get("reply_count"), data.get("replies")),
         "reposts": _first_metric(data.get("retweet_count"), data.get("retweets"), data.get("reposts")),
         "likes": _first_metric(data.get("favorite_count"), data.get("likes")),
-        "views": _first_metric(data.get("view_count"), data.get("views")),
+        "views": _first_metric(data.get("view_count"), data.get("views"), data.get("ext_views")),
         "media": {"all": media},
         "quote": normalize_syndication(quote, depth=depth + 1) if depth < 2 and isinstance(quote, dict) else None,
     }
 
 
 def normalize_fxtwitter(data: dict, *, include_quote: bool = True) -> dict | None:
-    """Translate FxTwitter's response into the card/media schema."""
+    """Translate FxTwitter/FixupX/FxEmbed-style responses into the card/media schema."""
     text = data.get("text")
     if not isinstance(text, str) or not text:
         return None
@@ -206,16 +224,19 @@ def normalize_fxtwitter(data: dict, *, include_quote: bool = True) -> dict | Non
     elif isinstance(epoch, str) and epoch.isdigit():
         date = datetime.fromtimestamp(int(epoch), UTC).isoformat()
     quote = data.get("quote")
+    verification = author.get("verification") if isinstance(author.get("verification"), dict) else {}
+    verified = (author.get("verified") is True or author.get("is_blue_verified") is True
+                or verification.get("verified") is True)
     return {
         "id": data.get("id") or data.get("tweetID") or data.get("id_str"),
         "text": text,
         "author": {"name": author.get("name") or data.get("user_name"),
                    "screen_name": author.get("screen_name") or data.get("user_screen_name"),
                    "avatar_url": author.get("avatar_url") or data.get("user_profile_image_url"),
-                   "verified": author.get("verified") is True or author.get("is_blue_verified") is True},
+                   "verified": verified},
         "created_at": date,
         "replies": _first_metric(data.get("replies"), data.get("reply_count"), data.get("conversation_count")),
-        "reposts": _first_metric(data.get("retweets"), data.get("reposts"), data.get("retweet_count")),
+        "reposts": _first_metric(data.get("retweets"), data.get("reposts"), data.get("retweet_count"), data.get("quotes")),
         "likes": _first_metric(data.get("likes"), data.get("favorite_count")),
         "views": _first_metric(data.get("views"), data.get("view_count")),
         "media": {"all": media},
@@ -260,11 +281,20 @@ def _merge_post(base: dict | None, extra: dict | None) -> dict | None:
 async def fetch_post(post_id: str, *, enrich_quotes: bool = True) -> dict | None:
     if not re.fullmatch(r"\d{5,25}", post_id):
         return None
-    sources = (("X Syndication", "https://cdn.syndication.twimg.com/tweet-result"),
-               ("VxTwitter", f"https://api.vxtwitter.com/i/status/{post_id}"),
-               ("FxTwitter", f"https://api.fxtwitter.com/2/status/{post_id}"))
+    sources = (
+        ("X Syndication", "https://cdn.syndication.twimg.com/tweet-result"),
+        ("VxTwitter", f"https://api.vxtwitter.com/i/status/{post_id}"),
+        ("FxEmbed v2", f"https://api.fxtwitter.com/2/status/{post_id}"),
+        ("FxEmbed", f"https://api.fxtwitter.com/status/{post_id}"),
+        ("FxEmbed i", f"https://api.fxtwitter.com/i/status/{post_id}"),
+        ("FixupX v2", f"https://api.fixupx.com/2/status/{post_id}"),
+        ("FixupX", f"https://api.fixupx.com/status/{post_id}"),
+        ("ReactTweet", f"https://react-tweet.vercel.app/api/tweet/{post_id}"),
+    )
     merged: dict | None = None
-    async with shared_client(timeout=10, follow_redirects=False) as client:
+    # FxEmbed requires an identifying User-Agent for its public API.
+    async with shared_client(timeout=10, follow_redirects=False,
+                            headers={"User-Agent": "DiscordVideoBot/1.0"}) as client:
         for name, url in sources:
             try:
                 params = {"id": post_id, "token": "0", "lang": "tr"} if name == "X Syndication" else None
@@ -277,6 +307,9 @@ async def fetch_post(post_id: str, *, enrich_quotes: bool = True) -> dict | None
                     post = normalize_syndication(payload)
                 elif name == "VxTwitter":
                     post = normalize_vxtwitter(payload)
+                elif name == "ReactTweet":
+                    tweet = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+                    post = normalize_syndication(tweet) if isinstance(tweet, dict) else None
                 else:
                     fx = payload.get("tweet") or payload.get("status") or payload
                     post = normalize_fxtwitter(fx) if isinstance(fx, dict) else None
