@@ -35,9 +35,9 @@ from .web_providers import download_web
 LOG = logging.getLogger(__name__)
 MEDIA_SUFFIXES = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
 PROCESS_TIMEOUT = 150
-# A story/highlight is a single small file. Waiting the generic 90 s for the
-# first provider keeps the user's queue locked, so give up quickly and hedge.
-STORY_FIRST_TIMEOUT = 18
+# A story/highlight is a single small file. Waiting too long for the first
+# provider keeps the user's queue locked, so give up quickly and hedge/fallback.
+STORY_FIRST_TIMEOUT = 12
 NO_MEDIA_RESULTS = {"no usable media", "no uploadable media"}
 PRIVATE_HINTS = ("login", "private", "authrequired")
 BOT_CHECK_HINTS = (
@@ -300,6 +300,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     stream_emitted: set[Path] = set()
     stream_lock = asyncio.Lock()
     stream_race_tasks: dict[str, asyncio.Task] = {}
+    stream_progress: dict[str, tuple[int, float]] = {}
 
     async def _emit_stream_files(name: str, paths: list[Path], *, allow_claim: bool = True) -> bool:
         if on_file is None or not paths:
@@ -370,6 +371,16 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                         ready = await _stream_ready(target, sizes)
                         if ready:
                             await _emit_stream_files(name, ready, allow_claim=allow_claim)
+                        if sizes:
+                            total_bytes = 0
+                            for tracked in sizes:
+                                try:
+                                    total_bytes += tracked.stat().st_size
+                                except OSError:
+                                    pass
+                            prev = stream_progress.get(name, (0, 0.0))
+                            if total_bytes >= prev[0]:
+                                stream_progress[name] = (max(total_bytes, prev[0]), time.monotonic())
                         await asyncio.sleep(0.4)
                 except BaseException:
                     if not exec_task.done():
@@ -517,7 +528,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         key = f"{link.platform}:{variant}" if variant else link.platform
         preferred = await provider_memory.preferred(key, link.platform, variant)
         ordered = await provider_memory.ranked(link.platform, names)
-        grace = await asyncio.to_thread(provider_memory.hedge_seconds, 8.0,
+        grace = await asyncio.to_thread(provider_memory.hedge_seconds, 6.0,
                                         platform=link.platform, provider=preferred)
         do_stream = on_file is not None if stream is None else (stream and on_file is not None)
         if not do_stream:
@@ -643,6 +654,39 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                 return await _race_all_streaming(rest)
 
             # grace expired, primary still running
+            if stream_claim["winner"] == priority:
+                try:
+                    result = await primary
+                except BaseException:
+                    result = None
+                return result or _partial_stream_result()
+
+            # If the preferred provider is actively downloading but hasn't emitted a
+            # stable file yet (e.g. large single video), give it a bit more time
+            # before hedging to avoid duplicate work.
+            extra_waited = 0.0
+            while extra_waited < 12.0 and stream_claim["winner"] != priority:
+                _, last = stream_progress.get(priority, (0, 0.0))
+                if not last or (time.monotonic() - last) > 4.0:
+                    break
+                step = min(3.0, 12.0 - extra_waited)
+                done, _ = await asyncio.wait({primary}, timeout=step)
+                if primary in done:
+                    try:
+                        result = primary.result()
+                    except BaseException:
+                        result = None
+                    if result is not None:
+                        return result
+                    if stream_claim["winner"] == priority and stream_emitted:
+                        return _partial_stream_result()
+                    if not rest:
+                        return _partial_stream_result()
+                    if not stream_emitted:
+                        stream_claim["winner"] = None
+                    return await _race_all_streaming(rest)
+                extra_waited += step
+
             if stream_claim["winner"] == priority:
                 try:
                     result = await primary

@@ -57,7 +57,7 @@ def hedge_seconds(default: float = 8.0, *, platform: str = "", provider: str | N
     if platform and provider:
         p95 = METRICS.p95_ms(platform, provider)
         if p95 > 0:
-            return max(3.0, min(20.0, p95 / 1000 * 1.2))
+            return max(3.0, min(10.0, p95 / 1000 * 1.2))
     return default
 
 

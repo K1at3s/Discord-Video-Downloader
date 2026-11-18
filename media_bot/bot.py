@@ -1323,7 +1323,7 @@ class MediaBot(discord.Client):
                 if not batch:
                     return
                 if batches_sent == 0:
-                    await resolve_caption(timeout=2.0)
+                    await resolve_caption(timeout=1.0)
                 batches_sent += 1
                 is_first = first_media_message is None
                 show_missing = caption_resolved or (not caption_pending and is_first)
