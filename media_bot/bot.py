@@ -28,6 +28,7 @@ from .circuit_breaker import BREAKERS
 from .cookiefile import cookie_report, cookie_warning
 from .cooldowns import Cooldowns
 from .download import DownloadError, download_media
+from . import i18n
 from .guild_settings import QUALITY_CHOICES, SETTINGS, describe
 from .health import start_health_server
 from .highlight_state import HIGHLIGHTS, format_wait
@@ -401,7 +402,8 @@ class MediaBot(discord.Client):
 
     async def _owner_command(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("Bu komut yalnızca bot sahibine açık.", ephemeral=True)
+            locale = i18n.locale_code(interaction)
+            await interaction.response.send_message(i18n.t("owner_only", locale), ephemeral=True)
             return False
         return True
 
@@ -409,8 +411,9 @@ class MediaBot(discord.Client):
         tree = discord.app_commands.CommandTree(self)
 
         async def run_existing(interaction: discord.Interaction, method, argument: str = "") -> None:
+            locale = i18n.locale_code(interaction)
             if not self._command_allowed(interaction):
-                await interaction.response.send_message("Çok hızlı; birkaç saniye sonra tekrar dene.", ephemeral=True)
+                await interaction.response.send_message(i18n.t("cooldown", locale), ephemeral=True)
                 return
             await interaction.response.defer()
             try:
@@ -421,13 +424,14 @@ class MediaBot(discord.Client):
             except Exception:
                 LOG.exception("Slash komutu başarısız: %s", interaction.command)
                 try:
-                    await interaction.followup.send("Komut çalıştırılırken hata oluştu.")
+                    await interaction.followup.send(i18n.t("command_failed", locale))
                 except discord.HTTPException:
                     pass
 
-        @tree.command(name="yardim", description="Bot komutlarını ve desteklenen platformları göster")
+        @tree.command(name="yardim", description="Bot komutlarını ve desteklenen platformları göster / Show bot help")
         async def yardim(interaction: discord.Interaction) -> None:
-            await interaction.response.send_message(HELP_TEXT, ephemeral=True)
+            locale = i18n.locale_code(interaction)
+            await interaction.response.send_message(i18n.help_text(locale), ephemeral=True)
 
         @tree.command(name="metrics", description="Sağlayıcı ve highlight metriklerini göster")
         async def metrics(interaction: discord.Interaction) -> None:
@@ -440,15 +444,15 @@ class MediaBot(discord.Client):
                 return
             await run_existing(interaction, self._reply_request_stats, f"{aralik} {platform}".strip())
 
-        @tree.command(name="info", description="Kendi işlem özetin")
+        @tree.command(name="info", description="Kendi işlem özetin / Your request summary")
         @discord.app_commands.describe(kullanici="Başka bir kullanıcı (yalnızca sahip)", aralik="24s, 7g veya 30g")
         async def info(interaction: discord.Interaction, kullanici: discord.Member | None = None, aralik: str = "") -> None:
+            locale = i18n.locale_code(interaction)
             if kullanici and interaction.user.id != self.owner_id:
-                await interaction.response.send_message(
-                    "Başka bir kullanıcının istatistiğini yalnızca bot sahibi görebilir.", ephemeral=True)
+                await interaction.response.send_message(i18n.t("info_other_owner_only", locale), ephemeral=True)
                 return
             if not self._command_allowed(interaction):
-                await interaction.response.send_message("Çok hızlı; birkaç saniye sonra tekrar dene.", ephemeral=True)
+                await interaction.response.send_message(i18n.t("cooldown", locale), ephemeral=True)
                 return
             await interaction.response.defer()
             adapter = InteractionMessage(interaction, mentions=[kullanici] if kullanici else [])
@@ -478,14 +482,14 @@ class MediaBot(discord.Client):
                 return
             await run_existing(interaction, self._reply_maintenance, durum)
 
-        @tree.command(name="ayar", description="Sunucu ayarlarını göster veya değiştir (yönetici)")
+        @tree.command(name="ayar", description="Sunucu ayarlarını göster veya değiştir / View or change server settings")
         @discord.app_commands.describe(
-            otomatik_thread="Bağlantılar için otomatik thread açılsın mı?",
-            youtube="YouTube bağlantılarında varsayılan kalite",
+            otomatik_thread="Bağlantılar için otomatik thread açılsın mı? / Auto-create thread for media links",
+            youtube="YouTube varsayılan kalite / Default YouTube quality",
         )
         @discord.app_commands.choices(youtube=[
-            discord.app_commands.Choice(name="Her zaman sor", value="sor"),
-            discord.app_commands.Choice(name="MP3", value="mp3"),
+            discord.app_commands.Choice(name="Her zaman sor / Always ask", value="sor"),
+            discord.app_commands.Choice(name="MP3 (ses / audio)", value="mp3"),
             discord.app_commands.Choice(name="360p", value="360"),
             discord.app_commands.Choice(name="720p", value="720"),
             discord.app_commands.Choice(name="1080p", value="1080"),
@@ -493,25 +497,32 @@ class MediaBot(discord.Client):
         async def ayar(interaction: discord.Interaction,
                        otomatik_thread: bool | None = None,
                        youtube: discord.app_commands.Choice[str] | None = None) -> None:
+            locale = i18n.locale_code(interaction)
             guild = interaction.guild
             if guild is None:
-                await interaction.response.send_message("Bu ayar yalnızca sunucularda kullanılır.", ephemeral=True)
+                await interaction.response.send_message(i18n.t("guild_only", locale), ephemeral=True)
                 return
             permissions = getattr(interaction.user, "guild_permissions", None)
             if not (permissions and permissions.manage_guild) and interaction.user.id != self.owner_id:
-                await interaction.response.send_message(
-                    "Bu komut için **Sunucuyu yönet** izni gerekir.", ephemeral=True)
+                await interaction.response.send_message(i18n.t("manage_guild_required", locale), ephemeral=True)
                 return
+            changed = otomatik_thread is not None or youtube is not None
             try:
-                settings = SETTINGS.update(
-                    guild.id,
-                    auto_thread=otomatik_thread,
-                    youtube_quality=youtube.value if youtube else None,
-                )
-            except ValueError as exc:
-                await interaction.response.send_message(str(exc), ephemeral=True)
+                if changed:
+                    settings = SETTINGS.update(
+                        guild.id,
+                        auto_thread=otomatik_thread,
+                        youtube_quality=youtube.value if youtube else None,
+                    )
+                else:
+                    settings = SETTINGS.get(guild.id)
+            except ValueError:
+                await interaction.response.send_message(i18n.t("invalid_quality", locale), ephemeral=True)
                 return
-            await interaction.response.send_message(describe(settings), ephemeral=True)
+            await interaction.response.send_message(
+                i18n.settings_message(settings, locale, updated=changed),
+                ephemeral=True,
+            )
 
         self.tree = tree
 
