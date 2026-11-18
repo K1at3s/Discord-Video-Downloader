@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -61,8 +62,8 @@ class YoutubeDownloadTests(unittest.IsolatedAsyncioTestCase):
             return (1, "HTTP Error 403: Forbidden") if len(commands) == 1 else (0, "")
 
         link = PostLink("youtube", "https://www.youtube.com/watch?v=TeJzEnHCIWY", "TeJzEnHCIWY")
-        with patch("media_bot.youtube._run", new=fake_run):
-            code, _ = await _yt_dlp(link, Path("unused"), "mp3", 20 * 1024 * 1024, None)
+        with tempfile.TemporaryDirectory() as temp, patch("media_bot.youtube._run", new=fake_run):
+            code, _ = await _yt_dlp(link, Path(temp), "mp3", 20 * 1024 * 1024, 80 * 1024 * 1024, None)
         self.assertEqual(code, 0)
         self.assertEqual(len(commands), 2)
         self.assertNotEqual(commands[0][commands[0].index("--extractor-args") + 1],
@@ -71,13 +72,18 @@ class YoutubeDownloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_format_reserves_audio_space_without_remote_ejs_by_default(self):
         commands = []
 
-        async def fake_run(command, **_kwargs):
+        async def fake_run(command, **kwargs):
             commands.append(command)
+            folder = kwargs.get("folder")
+            if folder:
+                (Path(folder) / "youtube.mp4").write_bytes(b"video")
             return 0, ""
 
         link = PostLink("youtube", "https://www.youtube.com/watch?v=TeJzEnHCIWY", "TeJzEnHCIWY")
-        with patch("media_bot.youtube._run", new=fake_run), patch.dict("os.environ", {"YTDLP_REMOTE_EJS": "0"}):
-            await _yt_dlp(link, Path("unused"), "720", 20 * 1024 * 1024, None)
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("media_bot.youtube._run", new=fake_run), \
+                patch.dict("os.environ", {"YTDLP_REMOTE_EJS": "0"}):
+            await _yt_dlp(link, Path(temp), "720", 20 * 1024 * 1024, 80 * 1024 * 1024, None)
         command = commands[0]
         self.assertNotIn("--remote-components", command)
         formats = command[command.index("-f") + 1]
@@ -88,13 +94,18 @@ class YoutubeDownloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_remote_ejs_requires_explicit_setting(self):
         commands = []
 
-        async def fake_run(command, **_kwargs):
+        async def fake_run(command, **kwargs):
             commands.append(command)
+            folder = kwargs.get("folder")
+            if folder:
+                (Path(folder) / "youtube.mp4").write_bytes(b"video")
             return 0, ""
 
         link = PostLink("youtube", "https://www.youtube.com/watch?v=TeJzEnHCIWY", "TeJzEnHCIWY")
-        with patch("media_bot.youtube._run", new=fake_run), patch.dict("os.environ", {"YTDLP_REMOTE_EJS": "1"}):
-            await _yt_dlp(link, Path("unused"), "720", 20 * 1024 * 1024, None)
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("media_bot.youtube._run", new=fake_run), \
+                patch.dict("os.environ", {"YTDLP_REMOTE_EJS": "1"}):
+            await _yt_dlp(link, Path(temp), "720", 20 * 1024 * 1024, 80 * 1024 * 1024, None)
         self.assertEqual(commands[0][commands[0].index("--remote-components") + 1], "ejs:github")
 
 

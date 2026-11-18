@@ -23,17 +23,17 @@ from .http import shared_client
 from .links import PostLink
 from .provider_metrics import METRICS
 from .race import first_success
+from .video_fit import fit_video
 
 LOG = logging.getLogger(__name__)
 CHOICES = {"mp3", "360", "720", "1080"}
 
 
 def suggest_choice(choice: str, max_bytes: int) -> str:
-    """Cap requested video quality to what is likely to fit the upload limit.
+    """Cap requested video quality to what is likely to fit or be compressible.
 
-    This avoids wasting a full download attempt on a resolution that will almost
-    certainly exceed Discord's limit; the normal retry/shrink path remains as a
-    fallback for edge cases.
+    Very low upload limits still force a lower resolution, but mid-range limits
+    may keep the requested resolution and rely on ffmpeg fitting when needed.
     """
     if choice == "mp3":
         return choice
@@ -42,11 +42,11 @@ def suggest_choice(choice: str, max_bytes: int) -> str:
     except (TypeError, ValueError):
         return choice
     mb = 1024 * 1024
-    if height >= 1080 and max_bytes < 55 * mb:
+    if height >= 1080 and max_bytes < 45 * mb:
         height = 720
-    if height >= 720 and max_bytes < 12 * mb:
+    if height >= 720 and max_bytes < 8 * mb:
         height = 360
-    if height >= 360 and max_bytes < 4 * mb:
+    if height >= 360 and max_bytes < 3 * mb:
         height = 360
     return str(height) if str(height) in CHOICES else choice
 
@@ -104,7 +104,9 @@ def song_filename(author: str | None, title: str | None, *, fallback: str = "you
     return f"{base or 'youtube'}.mp3"
 
 def gendownload_options(data: dict, choice: str, max_bytes: int) -> list[tuple[str, str]]:
-    options: list[tuple[int, str, str]] = []
+    """Return candidate streams; prefer those likely to fit, but allow oversized for later ffmpeg fit."""
+    preferred: list[tuple[int, str, str]] = []
+    fallback: list[tuple[int, str, str]] = []
     for item in (data.get("formats") or [])[:40]:
         if not isinstance(item, dict):
             continue
@@ -112,19 +114,22 @@ def gendownload_options(data: dict, choice: str, max_bytes: int) -> list[tuple[s
         if not isinstance(url, str) or not allowed_media_url(url, "gendownload") or urlsplit(url).path != "/api/stream":
             continue
         size = item.get("filesize")
-        if isinstance(size, (int, float)) and size > max_bytes:
-            continue
+        oversized = isinstance(size, (int, float)) and size > max_bytes
         extension = item.get("ext")
         if choice == "mp3":
             if item.get("type") == "audio" and extension in {"mp3", "m4a", "webm"}:
-                options.append((1 if extension == "mp3" else 0, url, extension))
+                bucket = fallback if oversized else preferred
+                bucket.append((1 if extension == "mp3" else 0, url, extension))
         elif item.get("type") == "video" and extension == "mp4":
             match = re.search(r"(\d{3,4})p", str(item.get("label", "")), re.IGNORECASE)
             height = int(match.group(1)) if match else 0
             if height and height <= int(choice):
-                options.append((height, url, "mp4"))
-    options.sort(key=lambda entry: entry[0], reverse=True)
-    return [(url, ext) for _, url, ext in options[:4]]
+                bucket = fallback if oversized else preferred
+                bucket.append((height, url, "mp4"))
+    preferred.sort(key=lambda entry: entry[0], reverse=True)
+    fallback.sort(key=lambda entry: entry[0], reverse=True)
+    ordered = preferred + fallback
+    return [(url, ext) for _, url, ext in ordered[:5]]
 
 
 async def _to_mp3(source: Path, target: Path, max_bytes: int) -> bool:
@@ -148,19 +153,21 @@ async def _to_mp3(source: Path, target: Path, max_bytes: int) -> bool:
     return valid
 
 
-async def _gendownload(link: PostLink, folder: Path, choice: str, max_bytes: int) -> tuple[int, str]:
+async def _gendownload(link: PostLink, folder: Path, choice: str, upload_limit: int,
+                        download_ceiling: int) -> tuple[int, str]:
     for attempt in range(2):
         try:
             async with shared_client(timeout=httpx.Timeout(30, connect=5), follow_redirects=False, trust_env=False) as client:
                 response = await client.post("https://gendownload.com/api/extract", json={"url": link.url})
                 response.raise_for_status()
-                options = gendownload_options(response.json(), choice, max_bytes)
+                options = gendownload_options(response.json(), choice, upload_limit)
                 for index, (url, ext) in enumerate(options, 1):
                     downloaded = folder / f"source_{index}.{ext}"
-                    if not await _stream(client, url, "gendownload", downloaded, max_bytes):
+                    # Allow saving up to download_ceiling; final fit/acceptance happens later.
+                    if not await _stream(client, url, "gendownload", downloaded, download_ceiling):
                         continue
                     if choice == "mp3" and ext != "mp3":
-                        if await _to_mp3(downloaded, folder / "youtube.mp3", max_bytes):
+                        if await _to_mp3(downloaded, folder / "youtube.mp3", upload_limit):
                             return 1, ""
                     else:
                         downloaded.rename(folder / ("youtube.mp3" if choice == "mp3" else "youtube.mp4"))
@@ -176,12 +183,13 @@ async def _gendownload(link: PostLink, folder: Path, choice: str, max_bytes: int
     return 0, "medya bulunamadı"
 
 
-async def _yt_dlp(link: PostLink, folder: Path, choice: str, max_bytes: int, cookie_file: Path | None) -> tuple[int, str]:
+async def _yt_dlp(link: PostLink, folder: Path, choice: str, upload_limit: int,
+                   download_ceiling: int, cookie_file: Path | None) -> tuple[int, str]:
     base = [sys.executable, "-m", "yt_dlp", "--no-config", "--no-playlist",
                "--socket-timeout", "15",
                "--retries", "3", "--fragment-retries", "3",
                "--concurrent-fragments", "4", "--no-part",
-               "--max-filesize", str(max_bytes),
+               "--max-filesize", str(download_ceiling),
                "-o", str(folder / "youtube.%(ext)s")]
     if os.getenv("YTDLP_REMOTE_EJS", "0") == "1":
         base.extend(("--remote-components", "ejs:github"))
@@ -193,7 +201,7 @@ async def _yt_dlp(link: PostLink, folder: Path, choice: str, max_bytes: int, coo
         for client in ("tv,web_embedded", "web_embedded,web,tv", "web_safari,web_embedded,tv"):
             command = [*base, "--extractor-args", f"youtube:player-client={client}",
                        *audio_args, link.url]
-            last = await _run(command, timeout=90, folder=folder, max_total_bytes=max_bytes * 3)
+            last = await _run(command, timeout=90, folder=folder, max_total_bytes=download_ceiling * 2)
             if last[0] == 0 or "HTTP Error 403" not in last[1]:
                 return last
             for partial in folder.glob("youtube.*"):
@@ -208,24 +216,32 @@ async def _yt_dlp(link: PostLink, folder: Path, choice: str, max_bytes: int, coo
             if lower < heights[0]:
                 heights.append(lower)
         last = (1, "uygun kalite bulunamadı")
-        video_budget = int(max_bytes * 0.75)
-        audio_budget = max_bytes - video_budget
+        # Prefer formats likely to fit upload limit, but allow larger sources up to
+        # download_ceiling so we can try ffmpeg fitting when needed.
+        video_budget = int(upload_limit * 0.75)
+        audio_budget = max(upload_limit - video_budget, 128 * 1024)
         size_hints = ("max-filesize", "larger than", "requested format", "no video formats")
         for height in heights:
-            formats = (f"bv[vcodec^=avc1][height<={height}][filesize<{video_budget}]"
-                       f"+ba[ext=m4a][filesize<{audio_budget}]"
-                       f"/b[ext=mp4][height<={height}][filesize<{max_bytes}]")
-            command = [*base, "-f", formats, "--merge-output-format", "mp4", link.url]
-            code, error = await _run(command, timeout=180, folder=folder,
-                                     max_total_bytes=max_bytes * 3)
-            last = (code, error)
-            if code == 0 and _selected_file(folder, choice, max_bytes):
-                return last
-            for partial in folder.glob("youtube.*"):
-                if partial.is_file():
-                    partial.unlink(missing_ok=True)
-            if code != 0 and not any(hint in (error or "").lower() for hint in size_hints):
-                return last
+            format_candidates = [
+                (f"bv[vcodec^=avc1][height<={height}][filesize<{video_budget}]"
+                 f"+ba[ext=m4a][filesize<{audio_budget}]"
+                 f"/b[ext=mp4][height<={height}][filesize<{upload_limit}]"),
+                (f"bv[vcodec^=avc1][height<={height}][filesize<{download_ceiling}]"
+                 f"+ba[ext=m4a]/b[ext=mp4][height<={height}][filesize<{download_ceiling}]"),
+                f"bv*[height<={height}]+ba/b[height<={height}]/b",
+            ]
+            for formats in format_candidates:
+                command = [*base, "-f", formats, "--merge-output-format", "mp4", link.url]
+                code, error = await _run(command, timeout=180, folder=folder,
+                                         max_total_bytes=download_ceiling * 2)
+                last = (code, error)
+                if await _pick_uploadable(folder, choice, upload_limit, download_ceiling):
+                    return (0, "")
+                for partial in folder.glob("youtube.*"):
+                    if partial.is_file() and not partial.name.startswith("youtube_fit_"):
+                        partial.unlink(missing_ok=True)
+                if code != 0 and not any(hint in (error or "").lower() for hint in size_hints):
+                    break
         return last
 
 
@@ -234,6 +250,28 @@ def _selected_file(folder: Path, choice: str, max_bytes: int) -> Path | None:
     for path in folder.glob("*"):
         if path.is_file() and path.suffix.lower() == suffix and 0 < path.stat().st_size <= max_bytes:
             return path
+    return None
+
+
+async def _pick_uploadable(folder: Path, choice: str, upload_limit: int, download_ceiling: int) -> Path | None:
+    selected = _selected_file(folder, choice, upload_limit)
+    if selected:
+        return selected
+    if choice == "mp3":
+        return None
+    suffix = ".mp4"
+    candidates = [
+        p for p in folder.glob("*")
+        if p.is_file() and p.suffix.lower() == suffix and upload_limit < p.stat().st_size <= download_ceiling
+    ]
+    if not candidates:
+        return None
+    source = max(candidates, key=lambda p: p.stat().st_size)
+    for max_height in (720, 480, 360):
+        target = folder / f"youtube_fit_{max_height}p.mp4"
+        target.unlink(missing_ok=True)
+        if await fit_video(source, target, upload_limit, force=True, max_height=max_height):
+            return target
     return None
 
 
@@ -263,9 +301,11 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
                            cobalt_key: str | None) -> tuple[Path, str]:
     if choice not in CHOICES:
         raise ValueError("Geçersiz YouTube seçeneği")
-    effective = suggest_choice(choice, max_bytes)
+    upload_limit = max_bytes
+    download_ceiling = min(max(upload_limit * 4, upload_limit + 40 * 1024 * 1024), 250 * 1024 * 1024)
+    effective = suggest_choice(choice, upload_limit)
     if effective != choice:
-        LOG.info("YouTube kalite ön tahmini: %sp -> %sp (limit ~%d MB)", choice, effective, max_bytes // (1024 * 1024))
+        LOG.info("YouTube kalite ön tahmini: %sp -> %sp (limit ~%d MB)", choice, effective, upload_limit // (1024 * 1024))
     choice = effective
     providers = ["cobalt", "gendownload"] if cobalt_url else ["gendownload"]
     providers.append("yt-dlp")
@@ -282,16 +322,19 @@ async def download_youtube(link: PostLink, folder: Path, choice: str, max_bytes:
         try:
             target.mkdir(parents=True, exist_ok=True)
             if name == "gendownload":
-                count, error = await asyncio.wait_for(_gendownload(link, target, choice, max_bytes), timeout=100)
-            elif name == "cobalt":
                 count, error = await asyncio.wait_for(
-                    download_cobalt(link.url, target, max_bytes, cobalt_url, cobalt_key,
+                    _gendownload(link, target, choice, upload_limit, download_ceiling), timeout=120,
+                )
+            elif name == "cobalt":
+                # Let cobalt download up to ceiling; compress to upload limit if needed.
+                count, error = await asyncio.wait_for(
+                    download_cobalt(link.url, target, download_ceiling, cobalt_url, cobalt_key,
                                     audio=choice == "mp3", video_quality=720 if choice == "mp3" else int(choice)),
                     timeout=150,
                 )
             else:
-                count, error = await _yt_dlp(link, target, choice, max_bytes, cookie_file)
-            selected = _selected_file(target, choice, max_bytes)
+                count, error = await _yt_dlp(link, target, choice, upload_limit, download_ceiling, cookie_file)
+            selected = await _pick_uploadable(target, choice, upload_limit, download_ceiling)
             if selected:
                 BREAKERS.success(name, "youtube")
                 reported = True
