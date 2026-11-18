@@ -32,7 +32,7 @@ class XStoryTests(unittest.TestCase):
                 self.assertEqual(image.width, 1080)
                 colors = set(image.convert("RGB").get_flattened_data())
                 self.assertIn((196, 33, 47), colors)  # Turkish flag is visible.
-                self.assertIn((39, 167, 231), colors)  # Verification badge is visible.
+                self.assertIn((29, 155, 240), colors)  # Verification badge is visible.
                 self.assertIn((237, 52, 84), colors)  # Heart icon is visible.
 
 
