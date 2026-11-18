@@ -73,6 +73,28 @@ def _count(value: object) -> str:
     return f"{number:,}".replace(",", ".")
 
 
+def _metric(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip().replace(",", "")
+        if value in {"", "—", "-"}:
+            return None
+    try:
+        number = int(float(value))
+    except (ValueError, TypeError):
+        return None
+    return number if number >= 0 else None
+
+
+def _first_metric(*values: object) -> int | None:
+    for value in values:
+        metric = _metric(value)
+        if metric is not None:
+            return metric
+    return None
+
+
 def normalize_vxtwitter(data: dict, *, include_quote: bool = True) -> dict | None:
     """Translate VXTwitter's public response into the card/media schema."""
     text = data.get("text")
@@ -90,18 +112,21 @@ def normalize_vxtwitter(data: dict, *, include_quote: bool = True) -> dict | Non
     epoch = data.get("date_epoch")
     if isinstance(epoch, (int, float)):
         date = datetime.fromtimestamp(epoch, UTC).isoformat()
+    elif isinstance(epoch, str) and epoch.isdigit():
+        date = datetime.fromtimestamp(int(epoch), UTC).isoformat()
     quote = data.get("qrt")
     return {
-        "id": data.get("tweetID"),
+        "id": data.get("tweetID") or data.get("id_str") or data.get("id"),
         "text": text,
-        "author": {"name": data.get("user_name"), "screen_name": data.get("user_screen_name"),
-                   "avatar_url": data.get("user_profile_image_url"),
-                   "verified": data.get("user_blue_verified") is True or data.get("user_verified") is True},
+        "author": {"name": data.get("user_name") or data.get("name"),
+                   "screen_name": data.get("user_screen_name") or data.get("screen_name"),
+                   "avatar_url": data.get("user_profile_image_url") or data.get("avatar_url"),
+                   "verified": data.get("user_blue_verified") is True or data.get("user_verified") is True or data.get("verified") is True},
         "created_at": date,
-        "replies": data.get("replies"),
-        "reposts": data.get("retweets"),
-        "likes": data.get("likes"),
-        "views": data.get("views"),
+        "replies": _first_metric(data.get("replies"), data.get("reply_count"), data.get("conversation_count")),
+        "reposts": _first_metric(data.get("retweets"), data.get("reposts"), data.get("retweet_count")),
+        "likes": _first_metric(data.get("likes"), data.get("favorite_count")),
+        "views": _first_metric(data.get("views"), data.get("view_count")),
         "media": {"all": media},
         "quote": normalize_vxtwitter(quote, include_quote=False) if include_quote and isinstance(quote, dict) else None,
     }
@@ -131,19 +156,105 @@ def normalize_syndication(data: dict, *, depth: int = 0) -> dict | None:
             media.append({"url": url, "type": "video" if kind in {"video", "animated_gif"} else "photo"})
     quote = data.get("quoted_tweet")
     return {
-        "id": data.get("id_str"),
+        "id": data.get("id_str") or data.get("id"),
         "text": text,
         "author": {"name": user.get("name"), "screen_name": user.get("screen_name"),
                    "avatar_url": user.get("profile_image_url_https") or user.get("profile_image_url"),
                    "verified": user.get("is_blue_verified") is True or user.get("verified") is True},
         "created_at": data.get("created_at"),
-        "replies": data.get("conversation_count"),
-        "reposts": data.get("retweet_count"),
-        "likes": data.get("favorite_count"),
-        "views": data.get("view_count"),
+        "replies": _first_metric(data.get("conversation_count"), data.get("reply_count"), data.get("replies")),
+        "reposts": _first_metric(data.get("retweet_count"), data.get("retweets"), data.get("reposts")),
+        "likes": _first_metric(data.get("favorite_count"), data.get("likes")),
+        "views": _first_metric(data.get("view_count"), data.get("views")),
         "media": {"all": media},
         "quote": normalize_syndication(quote, depth=depth + 1) if depth < 2 and isinstance(quote, dict) else None,
     }
+
+
+def normalize_fxtwitter(data: dict, *, include_quote: bool = True) -> dict | None:
+    """Translate FxTwitter's response into the card/media schema."""
+    text = data.get("text")
+    if not isinstance(text, str) or not text:
+        return None
+    author = data.get("author") or {}
+    if not isinstance(author, dict):
+        author = {}
+    media_data = data.get("media") or {}
+    media = []
+    if isinstance(media_data, dict):
+        raw_media = media_data.get("all") or []
+        if isinstance(raw_media, list):
+            for item in raw_media[:10]:
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("url")
+                if not isinstance(url, str):
+                    continue
+                kind = item.get("type")
+                media.append({"url": url, "type": "video" if kind in {"video", "gif"} else "photo"})
+        if not media:
+            for item in (media_data.get("videos") or [])[:10]:
+                if isinstance(item, dict) and isinstance(item.get("url"), str):
+                    media.append({"url": item["url"], "type": "video"})
+            for item in (media_data.get("photos") or [])[:10]:
+                if isinstance(item, dict) and isinstance(item.get("url"), str):
+                    media.append({"url": item["url"], "type": "photo"})
+    date = data.get("created_at") or ""
+    epoch = data.get("created_timestamp")
+    if isinstance(epoch, (int, float)):
+        date = datetime.fromtimestamp(epoch, UTC).isoformat()
+    elif isinstance(epoch, str) and epoch.isdigit():
+        date = datetime.fromtimestamp(int(epoch), UTC).isoformat()
+    quote = data.get("quote")
+    return {
+        "id": data.get("id") or data.get("tweetID") or data.get("id_str"),
+        "text": text,
+        "author": {"name": author.get("name") or data.get("user_name"),
+                   "screen_name": author.get("screen_name") or data.get("user_screen_name"),
+                   "avatar_url": author.get("avatar_url") or data.get("user_profile_image_url"),
+                   "verified": author.get("verified") is True or author.get("is_blue_verified") is True},
+        "created_at": date,
+        "replies": _first_metric(data.get("replies"), data.get("reply_count"), data.get("conversation_count")),
+        "reposts": _first_metric(data.get("retweets"), data.get("reposts"), data.get("retweet_count")),
+        "likes": _first_metric(data.get("likes"), data.get("favorite_count")),
+        "views": _first_metric(data.get("views"), data.get("view_count")),
+        "media": {"all": media},
+        "quote": normalize_fxtwitter(quote, include_quote=False) if include_quote and isinstance(quote, dict) else None,
+    }
+
+
+def _merge_post(base: dict | None, extra: dict | None) -> dict | None:
+    if base is None:
+        return extra
+    if extra is None:
+        return base
+    merged = dict(base)
+    for key in ("id", "text", "created_at"):
+        if not merged.get(key) and extra.get(key):
+            merged[key] = extra[key]
+    base_author = dict(base.get("author") or {})
+    extra_author = extra.get("author") or {}
+    for key in ("name", "screen_name", "avatar_url"):
+        if not base_author.get(key) and extra_author.get(key):
+            base_author[key] = extra_author[key]
+    if not base_author.get("verified") and extra_author.get("verified"):
+        base_author["verified"] = True
+    merged["author"] = base_author
+    for key in ("replies", "reposts", "likes", "views"):
+        if _metric(merged.get(key)) is None and _metric(extra.get(key)) is not None:
+            merged[key] = extra.get(key)
+    base_media = (base.get("media") or {}).get("all") or []
+    extra_media = (extra.get("media") or {}).get("all") or []
+    if not base_media and extra_media:
+        merged["media"] = {"all": extra_media}
+    else:
+        merged["media"] = base.get("media") or {"all": []}
+    base_quote = base.get("quote") if isinstance(base.get("quote"), dict) else None
+    extra_quote = extra.get("quote") if isinstance(extra.get("quote"), dict) else None
+    merged_quote = _merge_post(base_quote, extra_quote)
+    if merged_quote is not None:
+        merged["quote"] = merged_quote
+    return merged
 
 
 async def fetch_post(post_id: str, *, enrich_quotes: bool = True) -> dict | None:
@@ -152,6 +263,7 @@ async def fetch_post(post_id: str, *, enrich_quotes: bool = True) -> dict | None
     sources = (("X Syndication", "https://cdn.syndication.twimg.com/tweet-result"),
                ("VxTwitter", f"https://api.vxtwitter.com/i/status/{post_id}"),
                ("FxTwitter", f"https://api.fxtwitter.com/2/status/{post_id}"))
+    merged: dict | None = None
     async with shared_client(timeout=10, follow_redirects=False) as client:
         for name, url in sources:
             try:
@@ -166,24 +278,32 @@ async def fetch_post(post_id: str, *, enrich_quotes: bool = True) -> dict | None
                 elif name == "VxTwitter":
                     post = normalize_vxtwitter(payload)
                 else:
-                    post = payload.get("status") or payload.get("tweet")
+                    fx = payload.get("tweet") or payload.get("status") or payload
+                    post = normalize_fxtwitter(fx) if isinstance(fx, dict) else None
                 if isinstance(post, dict) and post.get("text"):
-                    quoted = post.get("quote")
-                    quoted_id = quoted.get("id") if isinstance(quoted, dict) else None
-                    if enrich_quotes and isinstance(quoted_id, str) and re.fullmatch(r"\d{5,25}", quoted_id) and not quoted.get("quote"):
-                        try:
-                            detail = await client.get("https://cdn.syndication.twimg.com/tweet-result",
-                                                      params={"id": quoted_id, "token": "0", "lang": "tr"})
-                            detail.raise_for_status()
-                            full_quote = normalize_syndication(detail.json())
-                            if full_quote:
-                                post["quote"] = full_quote
-                        except (httpx.HTTPError, ValueError, TypeError) as exc:
-                            LOG.info("Nested X quote unavailable for %s: %s", quoted_id, exc)
-                    return post
+                    merged = _merge_post(merged, post)
             except (httpx.HTTPError, ValueError, TypeError) as exc:
                 LOG.info("%s metadata unavailable for %s: %s", name, post_id, exc)
-    return None
+
+        if merged is None:
+            return None
+
+        # Fill in missing metrics/details by merging available normalized sources.
+        # Also try to enrich nested quotes from syndication if needed.
+        quoted = merged.get("quote")
+        quoted_id = quoted.get("id") if isinstance(quoted, dict) else None
+        if (enrich_quotes and isinstance(quoted_id, str) and re.fullmatch(r"\d{5,25}", quoted_id)
+                and isinstance(quoted, dict) and not quoted.get("quote")):
+            try:
+                detail = await client.get("https://cdn.syndication.twimg.com/tweet-result",
+                                          params={"id": quoted_id, "token": "0", "lang": "tr"})
+                detail.raise_for_status()
+                full_quote = normalize_syndication(detail.json())
+                if full_quote:
+                    merged["quote"] = _merge_post(quoted, full_quote)
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                LOG.info("Nested X quote unavailable for %s: %s", quoted_id, exc)
+        return merged
 
 
 async def _avatar(url: str | None) -> Image.Image | None:
