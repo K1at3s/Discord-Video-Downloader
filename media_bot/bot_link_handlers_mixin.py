@@ -235,8 +235,9 @@ class LinkHandlersMixin:
                             link.platform, first_media_batch, None, link.url, part=1,
                             show_missing_caption=True,
                         ))
-                    except discord.HTTPException:
-                        pass
+                        LOG.info("Caption remained unavailable for %s; updated first message", link.platform)
+                    except discord.HTTPException as exc:
+                        LOG.warning("Caption placeholder edit failed for %s: %s", link.platform, exc)
                     return
                 try:
                     await first_media_message.edit(view=B.media_gallery_view(
@@ -244,6 +245,7 @@ class LinkHandlersMixin:
                         show_missing_caption=False,
                     ))
                     caption_included = True
+                    LOG.info("Caption patched into first message for %s", link.platform)
                 except discord.HTTPException as exc:
                     LOG.warning("Caption edit failed for %s: %s", link.platform, exc)
                     return
@@ -252,7 +254,7 @@ class LinkHandlersMixin:
                         await self._reply(message, view=B.media_gallery_view(
                             link.platform, [], text_chunk, link.url, part=index,
                             show_missing_caption=False,
-                        ))
+                        ), as_reply=False)
                     except discord.HTTPException as exc:
                         LOG.warning("Caption continuation send failed for %s: %s", link.platform, exc)
                         break
@@ -363,7 +365,7 @@ class LinkHandlersMixin:
                                 await self._reply(message, view=B.media_gallery_view(
                                     link.platform, [], text_chunk, link.url, part=index,
                                     show_missing_caption=False,
-                                ))
+                                ), as_reply=False)
                         except discord.HTTPException as exc:
                             LOG.warning("Caption edit failed for %s: %s", link.platform, exc)
                     else:
@@ -373,7 +375,7 @@ class LinkHandlersMixin:
                         await self._reply(message, view=B.media_gallery_view(
                             link.platform, [], text_chunk, link.url, part=index,
                             show_missing_caption=False,
-                        ))
+                        ), as_reply=False)
 
                 if status_message and (sent_files or media):
                     await set_status(f"✅ {len(sent_files) or len(media)} dosya gönderildi.")

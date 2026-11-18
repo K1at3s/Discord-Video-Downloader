@@ -231,9 +231,10 @@ class OrchestrationMixin:
                     pass
 
     async def _reply(self, message: discord.Message, content: str = "", files: list[Path] | None = None,
-                     *, embed: discord.Embed | None = None, view: discord.ui.View | None = None) -> discord.Message:
+                     *, embed: discord.Embed | None = None, view: discord.ui.View | None = None,
+                     as_reply: bool | None = None) -> discord.Message:
         try:
-            return await self._reply_once(message, content, files, embed=embed, view=view)
+            return await self._reply_once(message, content, files, embed=embed, view=view, as_reply=as_reply)
         except discord.HTTPException as exc:
             if not files or not _upload_too_large(exc):
                 raise
@@ -241,11 +242,12 @@ class OrchestrationMixin:
             if not shrunk:
                 raise
             LOG.info("Discord rejected an upload as too large; retrying %d file(s) smaller", len(shrunk))
-            return await self._reply_once(message, content, shrunk, embed=embed, view=view)
+            return await self._reply_once(message, content, shrunk, embed=embed, view=view, as_reply=as_reply)
 
     async def _reply_once(self, message: discord.Message, content: str = "", files: list[Path] | None = None,
                           *, embed: discord.Embed | None = None,
-                          view: discord.ui.View | None = None) -> discord.Message:
+                          view: discord.ui.View | None = None,
+                          as_reply: bool | None = None) -> discord.Message:
         with ExitStack() as stack:
             attachments = []
             for path in files or []:
@@ -253,7 +255,9 @@ class OrchestrationMixin:
                 stack.callback(attachment.close)
                 attachments.append(attachment)
             use_reply = True
-            if isinstance(message, discord.Message):
+            if as_reply is not None:
+                use_reply = as_reply
+            elif isinstance(message, discord.Message):
                 guild = getattr(message, "guild", None)
                 if guild is not None:
                     try:
