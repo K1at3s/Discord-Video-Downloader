@@ -26,68 +26,64 @@ class OrchestrationMixin:
             return
         raw_content = (message.content or "").strip()
         content = raw_content.lower()
+        parts = content.split(maxsplit=1)
+        command = parts[0] if parts else ""
+        argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
         owner_id = getattr(self, "owner_id", 0)
         cooldowns = getattr(self, "command_cooldowns", None)
         if (cooldowns is not None and raw_content.startswith("!")
                 and message.author.id != owner_id
                 and not cooldowns.allow(message.author.id)):
             return
-        if content.split(maxsplit=1)[0] in {"!yardim", "!yardım", "!help", "!komutlar"}:
+        if command in {"!yardim", "!yardım", "!help", "!komutlar"}:
             help_text = __import__("media_bot.bot", fromlist=[""]).HELP_TEXT
             await self._reply(message, help_text)
             return
         if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
             await self._reply_metrics(message)
             return
-        if content.split(maxsplit=1)[0] in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem",
-                                            "!panel", "!admin", "!kontrol", "!kontrolpanel",
-                                            "!platform", "!platformdetay", "!detay"}:
+        if command in {"!stats", "!istatistik", "!log", "!logs", "!islem", "!işlem",
+                       "!panel", "!admin", "!kontrol", "!kontrolpanel",
+                       "!platform", "!platformdetay", "!detay"}:
             if message.author.id != owner_id:
                 await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
                 return
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_request_stats(message, argument)
             return
-        if content.split(maxsplit=1)[0] in {"!logtemizle", "!logclear"}:
+        if command in {"!logtemizle", "!logclear"}:
             if message.author.id != owner_id:
                 await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
                 return
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_log_clear(message, argument)
             return
-        if content.split(maxsplit=1)[0] in {"!logsil", "!logdelete"}:
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+        if command in {"!logsil", "!logdelete"}:
             await self._reply_log_delete_user(message, argument)
             return
-        if content.split(maxsplit=1)[0] in {"!hatalar", "!hataları", "!errors"}:
+        if command in {"!hatalar", "!hataları", "!errors"}:
             if message.author.id != owner_id:
                 await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
                 return
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_errors(message, argument)
             return
-        if content.split(maxsplit=1)[0] in {"!cache", "!önbellek", "!onbellek"}:
+        if command in {"!cache", "!önbellek", "!onbellek"}:
             await self._reply_cache(message)
             return
-        if content.split(maxsplit=1)[0] in {"!cachetemizle", "!önbellektemizle", "!onbellektemizle"}:
+        if command in {"!cachetemizle", "!önbellektemizle", "!onbellektemizle"}:
             if message.author.id != owner_id:
                 await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
                 return
             await self._reply_cache_clear(message)
             return
-        if content.split(maxsplit=1)[0] in {"!info", "!profil", "!me", "!kimlik"}:
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+        if command in {"!info", "!profil", "!me", "!kimlik"}:
             await self._reply_user_info(message, argument)
             return
-        if content.split(maxsplit=1)[0] in {"!bakim", "!maintenance"}:
+        if command in {"!bakim", "!maintenance"}:
             if message.author.id != owner_id:
                 await self._reply(message, "Bu komut yalnızca bot sahibine açık.")
                 return
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
             await self._reply_maintenance(message, argument)
             return
-        if content.split(maxsplit=1)[0] in {"!ayar", "!ayarlar", "!settings"}:
-            argument = raw_content.split(maxsplit=1)[1] if len(raw_content.split(maxsplit=1)) > 1 else ""
+        if command in {"!ayar", "!ayarlar", "!settings"}:
             await self._reply_settings(message, argument)
             return
         B = __import__("media_bot.bot", fromlist=[""])
