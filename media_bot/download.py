@@ -139,7 +139,7 @@ async def _yt_dlp(link: PostLink, folder: Path, max_bytes: int, cookie_file: Pat
         "--playlist-end", str(MAX_MEDIA_ITEMS), "--max-filesize", str(max_bytes),
         "--socket-timeout", "15", "--retries", "3", "--fragment-retries", "3",
         "--concurrent-fragments", "4", "--no-part",
-        "--restrict-filenames", "--no-write-info-json", "--no-write-thumbnail",
+        "--restrict-filenames", "--write-info-json", "--no-write-thumbnail",
         "--merge-output-format", "mp4", "-f", "bv*+ba/best",
         "-o", str(folder / "%(id)s_%(playlist_index)s.%(ext)s"),
         *_cookies(cookie_file), link.url,

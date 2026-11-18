@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import re
 import sys
@@ -31,7 +32,45 @@ def _clean(value: object) -> str | None:
     return text or None
 
 
+def _tiktok_caption(page: str) -> str | None:
+    match = re.search(
+        r'<script[^>]*id=["\']__UNIVERSAL_DATA_FOR_REHYDRATION__["\'][^>]*>(.*?)</script>',
+        page, re.DOTALL,
+    )
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            detail = data.get("__DEFAULT_SCOPE__", {}).get("webapp.video-detail", {})
+            desc = detail.get("itemInfo", {}).get("itemStruct", {}).get("desc")
+            if desc:
+                return _clean(desc)
+        except Exception:
+            pass
+    match = re.search(r'<script[^>]*id=["\']SIGI_STATE["\'][^>]*>(.*?)</script>', page, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            for item in data.get("ItemModule", {}).values():
+                if isinstance(item, dict) and item.get("desc"):
+                    return _clean(item["desc"])
+        except Exception:
+            pass
+    for candidate_match in re.finditer(r'"desc"\s*:\s*"((?:\\.|[^"\\])*)"', page):
+        try:
+            val = json.loads('"' + candidate_match.group(1) + '"')
+            cleaned = _clean(val)
+            if cleaned and cleaned.casefold() != "tiktok":
+                return cleaned
+        except Exception:
+            continue
+    return None
+
+
 def _page_caption(page: str, platform: str, *, allow_truncated: bool = False) -> str | None:
+    if platform == "tiktok":
+        caption = _tiktok_caption(page)
+        if caption:
+            return caption
     parser = _Meta()
     parser.feed(page)
     values = parser.values
@@ -99,7 +138,7 @@ async def _fetch(link: PostLink, route: str, cookie_file: Path | None = None) ->
             if link.platform == "facebook":
                 page = await _facebook_page(client, link.url)
             else:
-                response = await client.get(link.url)
+                response = await client.get(link.url, follow_redirects=True)
                 response.raise_for_status()
                 page = response.text[:5_000_000]
             return _page_caption(page, link.platform, allow_truncated=link.platform == "facebook")
@@ -148,7 +187,7 @@ async def fetch_caption(link: PostLink, cookie_file: Path | None = None) -> str 
     routes = {
         "instagram": ["page", "gendownload"],
         "facebook": ["page", "gendownload"],
-        "tiktok": ["tikwm", "gendownload", "page"],
+        "tiktok": ["page", "tikwm", "gendownload"],
         "reddit": ["reddit_rss", "reddit"],
         "youtube": ["gendownload", "youtube"],
         "threads": ["page"],
