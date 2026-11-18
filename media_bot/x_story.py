@@ -209,29 +209,47 @@ def _draw_quote(draw: ImageDraw.ImageDraw, image: Image.Image, node: dict,
     return height
 
 
+def _draw_stat_count(draw: ImageDraw.ImageDraw, text: str, x: int, center_y: int,
+                     font: ImageFont.ImageFont, fill: str = MUTED) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_h = bbox[3] - bbox[1]
+    text_w = bbox[2] - bbox[0]
+    draw.text((x, int(center_y - text_h / 2 - bbox[1])), text, font=font, fill=fill)
+    return int(x + text_w)
+
+
 def _draw_stats(draw: ImageDraw.ImageDraw, post: dict, y: int) -> None:
     count_font = _font(28)
-    # Draw the icons as shapes so Discord receives pixels, not missing emoji glyphs.
-    draw.ellipse((92, y + 3, 124, y + 31), outline="#8cc7eb", width=3)
-    draw.polygon(((98, y + 28), (96, y + 38), (109, y + 29)), fill="#8cc7eb")
-    for dot in (100, 108, 116):
-        draw.ellipse((dot, y + 16, dot + 3, y + 19), fill="#8cc7eb")
-    draw.text((135, y - 2), _count(post.get("replies")), font=count_font, fill=MUTED)
+    # Keep icons and counters on a shared vertical center with proportional spacing.
+    center_y = y + 20
+    x = 92
+    gap_icon_text = 10
+    gap_group = 54
 
-    draw.rounded_rectangle((230, y + 3, 262, y + 34), radius=5, fill="#268fca")
-    draw.line((236, y + 13, 255, y + 13, 251, y + 9), fill="white", width=3)
-    draw.line((256, y + 23, 237, y + 23, 241, y + 27), fill="white", width=3)
-    draw.text((272, y - 2), _count(post.get("reposts")), font=count_font, fill=MUTED)
+    # replies (speech bubble)
+    draw.ellipse((x, center_y - 15, x + 32, center_y + 13), outline="#8cc7eb", width=3)
+    draw.polygon(((x + 6, center_y + 10), (x + 4, center_y + 20), (x + 17, center_y + 11)), fill="#8cc7eb")
+    for dot in (x + 8, x + 16, x + 24):
+        draw.ellipse((dot, center_y - 2, dot + 3, center_y + 1), fill="#8cc7eb")
+    x = _draw_stat_count(draw, _count(post.get("replies")), x + 32 + gap_icon_text, center_y, count_font) + gap_group
 
-    draw.ellipse((365, y + 7, 383, y + 25), fill="#ed3454")
-    draw.ellipse((379, y + 7, 397, y + 25), fill="#ed3454")
-    draw.polygon(((365, y + 18), (397, y + 18), (381, y + 37)), fill="#ed3454")
-    draw.text((407, y - 2), _count(post.get("likes")), font=count_font, fill=MUTED)
+    # reposts
+    draw.rounded_rectangle((x, center_y - 15, x + 32, center_y + 16), radius=5, fill="#268fca")
+    draw.line((x + 6, center_y - 5, x + 25, center_y - 5, x + 21, center_y - 9), fill="white", width=3)
+    draw.line((x + 26, center_y + 5, x + 7, center_y + 5, x + 11, center_y + 9), fill="white", width=3)
+    x = _draw_stat_count(draw, _count(post.get("reposts")), x + 32 + gap_icon_text, center_y, count_font) + gap_group
 
-    draw.ellipse((526, y + 9, 563, y + 30), outline="#c7a483", width=3)
-    draw.ellipse((539, y + 11, 551, y + 27), fill="#8c5a38")
-    draw.ellipse((543, y + 15, 547, y + 21), fill="#111820")
-    draw.text((572, y - 2), _count(post.get("views")), font=count_font, fill=MUTED)
+    # likes (heart)
+    draw.ellipse((x, center_y - 11, x + 18, center_y + 7), fill="#ed3454")
+    draw.ellipse((x + 14, center_y - 11, x + 32, center_y + 7), fill="#ed3454")
+    draw.polygon(((x, center_y), (x + 32, center_y), (x + 16, center_y + 19)), fill="#ed3454")
+    x = _draw_stat_count(draw, _count(post.get("likes")), x + 32 + gap_icon_text, center_y, count_font) + gap_group
+
+    # views (eye)
+    draw.ellipse((x, center_y - 10, x + 37, center_y + 11), outline="#c7a483", width=3)
+    draw.ellipse((x + 13, center_y - 8, x + 25, center_y + 8), fill="#8c5a38")
+    draw.ellipse((x + 17, center_y - 4, x + 21, center_y + 2), fill="#111820")
+    _draw_stat_count(draw, _count(post.get("views")), x + 37 + gap_icon_text, center_y, count_font)
 
 
 def _story_background(height: int, card_top: int, card_bottom: int) -> Image.Image:
@@ -309,14 +327,24 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
 
     _avatar(draw, image, avatars[0] if avatars else None, 92, card_top + 48, 96)
     name_font = _font(37, True)
+    handle_font = _font(29)
+    name_y = card_top + 56
+    handle_y = card_top + 106
     name = _fit(draw, name, name_font, 650)
-    name_end = _draw_mixed(draw, (216, card_top + 58), name, name_font, TEXT)
+    name_end = _draw_mixed(draw, (216, name_y), name, name_font, TEXT)
     if author.get("verified") is True:
-        _badge(draw, name_end + 9, card_top + 65, 28)
-    draw.text((216, card_top + 108), "@" + handle if handle else "X", font=_font(29), fill=MUTED)
-    draw.ellipse((925, card_top + 59, 989, card_top + 123),
-                 fill="#122734", outline="#6cbfc5", width=2)
-    draw.text((945, card_top + 67), "X", font=_font(29, True), fill="#e2f5f4")
+        _badge(draw, name_end + 10, name_y + 6, 28)
+    draw.text((216, handle_y), "@" + handle if handle else "X", font=handle_font, fill=MUTED)
+    cx1, cy1, cx2, cy2 = 925, card_top + 59, 989, card_top + 123
+    draw.ellipse((cx1, cy1, cx2, cy2), fill="#122734", outline="#6cbfc5", width=2)
+    x_font = _font(29, True)
+    x_text = "X"
+    x_bbox = draw.textbbox((0, 0), x_text, font=x_font)
+    x_w = x_bbox[2] - x_bbox[0]
+    x_h = x_bbox[3] - x_bbox[1]
+    x_x = cx1 + (cx2 - cx1 - x_w) / 2 - x_bbox[0]
+    x_y = cy1 + (cy2 - cy1 - x_h) / 2 - x_bbox[1]
+    draw.text((x_x, x_y), x_text, font=x_font, fill="#e2f5f4")
 
     for index, line in enumerate(body_lines):
         _draw_mixed(draw, (92, card_top + 190 + index * 51), line, body_font, TEXT)
@@ -326,7 +354,7 @@ def render_story(post: dict, avatars: list[Image.Image | None], output: Path,
     divider = card_top + divider_y
     draw.line((92, divider, 988, divider), fill="#35424d", width=2)
     draw.text((92, divider + 23), _date_label(post.get("created_at")), font=_font(27), fill=MUTED)
-    _draw_stats(draw, post, divider + 75)
+    _draw_stats(draw, post, divider + 67)
 
     footer_font = _font(24, True)
     footer = _fit(draw, footer[:80], footer_font, 650)
