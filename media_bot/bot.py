@@ -1229,14 +1229,8 @@ class MediaBot(discord.Client):
             user_id = getattr(getattr(message, "author", None), "id", None)
             await set_status("⏳ Medya indiriliyor...")
             limit_bytes = upload_limit(message, self.upload_bytes)
-            download_task = asyncio.create_task(
-                download_media(link, folder, limit_bytes, self.cookie_file,
-                               self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
-                               user_id=user_id)
-            )
-            suffixes = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
-            sizes: dict[Path, tuple[int, float]] = {}
             sent_files: list[Path] = []
+            uploaded: set[Path] = set()
             batches_sent = 0
             caption: str | None = None
             chunks: list[str] = []
@@ -1247,41 +1241,35 @@ class MediaBot(discord.Client):
                     caption = await caption_or_none(timeout=timeout)
                     chunks = display_chunks(caption)
 
-            try:
-                last_count = -1
-                while not download_task.done():
-                    now = time.monotonic()
-                    ready = 0
-                    stabilizing = 0
-                    for path in folder.rglob("*"):
-                        if not path.is_file() or path.suffix.lower() not in suffixes:
-                            continue
-                        try:
-                            size = path.stat().st_size
-                        except OSError:
-                            continue
-                        if size <= 0 or size > limit_bytes:
-                            continue
-                        prev = sizes.get(path)
-                        if not prev or prev[0] != size:
-                            sizes[path] = (size, now)
-                            stabilizing += 1
-                            continue
-                        if now - prev[1] >= 1.0:
-                            ready += 1
-                        else:
-                            stabilizing += 1
-                    count = ready + stabilizing
-                    if status_message and count != last_count:
-                        if ready:
-                            await set_status(f"⏳ İndiriliyor… {ready} dosya hazır")
-                        elif stabilizing:
-                            await set_status(f"⏳ İndiriliyor… {stabilizing} dosya hazırlanıyor")
-                        last_count = count
-                    await asyncio.sleep(0.5)
+            async def send_paths(paths: list[Path]) -> None:
+                nonlocal batches_sent
+                batch = [p for p in paths if p not in uploaded and p.is_file()]
+                if not batch:
+                    return
+                await ensure_caption(timeout=2.0 if batches_sent == 0 else 0.5)
+                batches_sent += 1
+                if status_message:
+                    await set_status(f"📤 {batches_sent}. grup gönderiliyor ({len(sent_files) + len(batch)} dosya)…")
+                view = media_gallery_view(link.platform, batch,
+                                          chunks[0] if batches_sent == 1 and chunks else None,
+                                          link.url, part=batches_sent)
+                await self._reply(message, files=batch, view=view)
+                for p in batch:
+                    uploaded.add(p)
+                sent_files.extend(batch)
 
+            async def on_stream_file(paths: list[Path]) -> None:
+                # Upload streamed files promptly (progressive delivery).
+                for batch in attachment_batches(paths):
+                    await send_paths(batch)
+
+            try:
                 try:
-                    media, _ = await download_task
+                    media, _ = await download_media(
+                        link, folder, limit_bytes, self.cookie_file,
+                        self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
+                        user_id=user_id, on_file=on_stream_file,
+                    )
                 except DownloadError as exc:
                     error = exc
                     media = []
@@ -1291,7 +1279,7 @@ class MediaBot(discord.Client):
                     await asyncio.gather(caption_task, return_exceptions=True)
                     raise
 
-                if not media:
+                if not media and not sent_files:
                     caption = await caption_or_none()
                     preview = await self._reddit_message_preview(message, link) if link.platform == "reddit" else Preview()
                     if not preview.has_content:
@@ -1307,36 +1295,20 @@ class MediaBot(discord.Client):
                             await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
                         return "failure", [], None, 0
 
-                await ensure_caption()
-                batches = list(attachment_batches(media))
-                total_batches = len(batches)
-                if status_message and total_batches:
-                    await set_status(f"📤 {len(media)} dosya, {total_batches} grup gönderilecek…")
-                for index, chunk in enumerate(batches):
-                    batches_sent += 1
-                    if status_message and total_batches > 1:
-                        await set_status(f"📤 {batches_sent}/{total_batches} grup gönderiliyor…")
-                    elif status_message:
-                        await set_status("📤 Gönderiliyor…")
-                    view = media_gallery_view(link.platform, chunk,
-                                              chunks[0] if batches_sent == 1 and chunks else None,
-                                              link.url, part=batches_sent)
-                    await self._reply(message, files=chunk, view=view)
-                    sent_files.extend(chunk)
+                # Flush any files from the authoritative result that were not streamed/sent.
+                remaining = [p for p in media if p not in uploaded]
+                for batch in attachment_batches(remaining):
+                    await send_paths(batch)
+
+                await ensure_caption(timeout=None)
                 for index, text_chunk in enumerate(chunks[1:], batches_sent + 1):
                     await self._reply(message, view=media_gallery_view(link.platform, [], text_chunk,
                                                                        link.url, part=index))
-                if status_message and batches_sent:
-                    await set_status(f"✅ {len(sent_files)} dosya gönderildi.")
+                if status_message and (sent_files or media):
+                    await set_status(f"✅ {len(sent_files) or len(media)} dosya gönderildi.")
                 total_bytes = sum(p.stat().st_size for p in media if p.is_file())
                 return "success", media, None, total_bytes
             finally:
-                if not download_task.done():
-                    download_task.cancel()
-                    try:
-                        await download_task
-                    except BaseException:
-                        pass
                 if not caption_task.done():
                     caption_task.cancel()
                 await asyncio.gather(caption_task, return_exceptions=True)

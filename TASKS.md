@@ -36,9 +36,7 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
   `journal_mode=WAL`, `busy_timeout=5000`, `synchronous=NORMAL` uyguluyor.
 - [x] **Linux/uvloop (opsiyonel)** — `requirements.txt` içine Windows dışı için
   `uvloop` eklendi; `main()` mevcutsa politikayı kuruyor.
-- [~] **İndirme/yükleme örtüşmesi** — çok linkli mesajlarda tamamlandı. Tek linkin
-  çok dosyalı galerisinde yükleme hâlâ tüm indirmeler bitince başlıyor; bunun için
-  `download_media`'nın dosya bazlı akış döndürmesi gerekiyor.
+- [x] **İndirme/yükleme örtüşmesi** - çok linkli mesajlarda tamamlandı. Tek linkte çok dosyalı galeriler için `download_media` dosya-bazlı akış (`on_file`) ve tek-kazanan garanti modeliyle kazanan sağlayıcının hazır dosyalarını indirme sürerken gönderir; tek dosyalı videolarda örtüşme sınırlı kalabilir.
 
 ## Ölçüm kontrol listesi
 
@@ -90,11 +88,10 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 
 - [x] **Canlı indirme/gönderim ilerlemesi** — genel medya akışında indirme sırasında `⏳ İndiriliyor… N dosya hazır/hazırlanıyor`, gönderim sırasında `📤 X/Y grup gönderiliyor…` ve bitişte `✅ N dosya gönderildi` durumları gösteriliyor; Bluesky çoklu batch gönderiminde de grup ilerlemesi var.
 - [x] **İndirme öncesi YouTube kalite tahmini** — `youtube.suggest_choice()` yükleme limitine göre istenen kaliteyi önceden sınırlar (örn. küçük limitte 1080p→720p/360p), gereksiz indirme ve 413 denemelerini azaltır.
-- [~] **İndirme→yükleme akışını tam birleştirme** — indirme ve yükleme artık ayrı canlı durumlarla izleniyor; ancak sağlayıcı yarışı/hedge sırasında kazanan deneme tamamlanmadan dosya göndermek riskli olduğu için gerçek “indirilirken yükle” örtüşmesi henüz yok. Bunun için `download_media`/provider katmanının dosya-bazlı akış (yield) ve tek-kazanan garanti modeliyle yeniden tasarlanması gerekiyor.
+- [x] **İndirme→yükleme akışını tam birleştirme** — `download_media` dosya-bazlı akış (`on_file` callback) ve tek-kazanan garanti modeliyle yeniden tasarlandı: yarışan sağlayıcılarda ilk kararlı medyayı üreten deneme kazanan ilan edilip diğer denemeler iptal edilir; kazananın yeni hazır dosyaları indirme sürerken Discord’a gönderilir. Genel bot akışı bu akışı kullanıyor; metrik/önbellek/breaker/kota/temizlik davranışı korunuyor. Tek dosyalı videolarda örtüşme sınırlı olabilir, çok dosyalı galerilerde asıl UX kazanımı sağlanır.
 
 ## Sıradaki paketler
 
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
 - [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
-- [ ] Tek linkte çok dosyalı galeri için indirme/yükleme akışını tam birleştirme (provider çıktısını dosya bazlı akıtma).
 - [ ] Diğer platformlarda (Reddit/X kart akışları) canlı ilerleme ve ön boyut tahmini genişletmesi.

@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -218,7 +219,60 @@ def provider_order(platform: str, cobalt_enabled: bool = False, gallery_rs_enabl
     return providers
 
 
-async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_file: Path | None = None, cobalt_url: str | None = None, cobalt_key: str | None = None, gallery_rs_path: Path | None = None, user_id: int | None = None) -> tuple[list[Path], str]:
+async def _execute_provider(name: str, link: PostLink, target: Path, max_bytes: int,
+                             cookie_file: Path | None, cobalt_url: str | None,
+                             cobalt_key: str | None, gallery_rs_path: Path | None) -> tuple[int, str]:
+    if name == "gallery-dl":
+        return await _gallery_dl(link, target, max_bytes, cookie_file)
+    if name == "yt-dlp":
+        return await _yt_dlp(link, target, max_bytes, cookie_file)
+    if name == "instaloader":
+        return await _instaloader(link, target, max_bytes, cookie_file)
+    if name == "direct":
+        try:
+            count, error = await asyncio.wait_for(download_direct(link, target, max_bytes), timeout=150)
+            return (0 if count else 1), error
+        except TimeoutError:
+            return -1, "zaman aşımı"
+    if name == "gallery-dl-rs":
+        return await _gallery_rs(link, target, max_bytes, cookie_file, gallery_rs_path)
+    if name == "you-get":
+        return await _you_get(link, target, max_bytes)
+    if name == "gendownload":
+        try:
+            count, error = await asyncio.wait_for(download_gendownload(link, target, max_bytes), timeout=90)
+            return (0 if count else 1), error
+        except TimeoutError:
+            return -1, "zaman aşımı"
+    if name == "vxtwitter":
+        try:
+            count, error = await asyncio.wait_for(download_vxtwitter(link.post_id or "", target, max_bytes), timeout=120)
+            return (0 if count else 1), error
+        except TimeoutError:
+            return -1, "zaman aşımı"
+    if name == "indownio":
+        try:
+            count, error = await asyncio.wait_for(download_indownio(link, target, max_bytes), timeout=150)
+            return (0 if count else 1), error
+        except TimeoutError:
+            return -1, "zaman aşımı"
+    if name in {"indown", "tiktokio", "rapidsave", "btch", "vette", "embed", "threads-page", "threadsdl"}:
+        try:
+            count, error = await asyncio.wait_for(download_web(name, link, target, max_bytes, cookie_file), timeout=90)
+            return (0 if count else 1), error
+        except TimeoutError:
+            return -1, "zaman aşımı"
+    try:
+        count, error = await asyncio.wait_for(download_cobalt(link.url, target, max_bytes, cobalt_url, cobalt_key), timeout=150)
+        return (0 if count else 1), error
+    except TimeoutError:
+        return -1, "zaman aşımı"
+
+
+async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_file: Path | None = None,
+                         cobalt_url: str | None = None, cobalt_key: str | None = None,
+                         gallery_rs_path: Path | None = None, user_id: int | None = None,
+                         on_file: Callable[[list[Path]], Awaitable[None]] | None = None) -> tuple[list[Path], str]:
     """Return uploadable files and the successful provider name.
 
     Each provider gets its own directory so a partial failure cannot be
@@ -242,7 +296,57 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     private = False
     rate_limited = False
     bot_check = False
-    async def attempt(name: str) -> tuple[list[Path], str] | None:
+    stream_claim: dict[str, str | None] = {"winner": None}
+    stream_emitted: set[Path] = set()
+    stream_lock = asyncio.Lock()
+    stream_race_tasks: dict[str, asyncio.Task] = {}
+
+    async def _emit_stream_files(name: str, paths: list[Path], *, allow_claim: bool = True) -> bool:
+        if on_file is None or not paths:
+            return False
+        async with stream_lock:
+            if stream_claim["winner"] is None:
+                if not allow_claim:
+                    return False
+                stream_claim["winner"] = name
+                for other, task in list(stream_race_tasks.items()):
+                    if other != name and not task.done():
+                        task.cancel()
+            if stream_claim["winner"] != name:
+                return False
+            to_send = []
+            for path in paths:
+                if path not in stream_emitted:
+                    stream_emitted.add(path)
+                    to_send.append(path)
+        if not to_send:
+            return stream_claim["winner"] == name
+        await on_file(to_send)
+        return True
+
+    async def _stream_ready(target: Path, sizes: dict[Path, tuple[int, float]]) -> list[Path]:
+        now = time.monotonic()
+        ready: list[Path] = []
+        for path in target.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in MEDIA_SUFFIXES:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size <= 0 or size > max_bytes:
+                continue
+            prev = sizes.get(path)
+            if not prev or prev[0] != size:
+                sizes[path] = (size, now)
+                continue
+            if now - prev[1] >= 1.0:
+                ready.append(path)
+        ready.sort(key=lambda p: (p.stat().st_mtime, str(p)))
+        return ready
+
+    async def attempt(name: str, *, stream: bool | None = None,
+                      allow_claim: bool = True) -> tuple[list[Path], str] | None:
         nonlocal oversize, private, rate_limited, bot_check
         started = time.monotonic()
         if not BREAKERS.allow(name, link.platform):
@@ -254,58 +358,54 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         reported = False
         try:
             target.mkdir(parents=True, exist_ok=True)
-            if name == "gallery-dl":
-                code, error = await _gallery_dl(link, target, max_bytes, cookie_file)
-            elif name == "yt-dlp":
-                code, error = await _yt_dlp(link, target, max_bytes, cookie_file)
-            elif name == "instaloader":
-                code, error = await _instaloader(link, target, max_bytes, cookie_file)
-            elif name == "direct":
+            do_stream = on_file is not None if stream is None else (stream and on_file is not None)
+            if do_stream:
+                exec_task = asyncio.create_task(
+                    _execute_provider(name, link, target, max_bytes, cookie_file,
+                                      cobalt_url, cobalt_key, gallery_rs_path)
+                )
+                sizes: dict[Path, tuple[int, float]] = {}
                 try:
-                    count, error = await asyncio.wait_for(download_direct(link, target, max_bytes), timeout=150)
-                    code = 0 if count else 1
-                except TimeoutError:
-                    code, error = -1, "zaman aşımı"
-            elif name == "gallery-dl-rs":
-                code, error = await _gallery_rs(link, target, max_bytes, cookie_file, gallery_rs_path)
-            elif name == "you-get":
-                code, error = await _you_get(link, target, max_bytes)
-            elif name == "gendownload":
+                    while not exec_task.done():
+                        ready = await _stream_ready(target, sizes)
+                        if ready:
+                            await _emit_stream_files(name, ready, allow_claim=allow_claim)
+                        await asyncio.sleep(0.4)
+                except BaseException:
+                    if not exec_task.done():
+                        exec_task.cancel()
+                    await asyncio.gather(exec_task, return_exceptions=True)
+                    raise
                 try:
-                    count, error = await asyncio.wait_for(download_gendownload(link, target, max_bytes), timeout=90)
-                    code = 0 if count else 1
-                except TimeoutError:
-                    code, error = -1, "zaman aşımı"
-            elif name == "vxtwitter":
-                try:
-                    count, error = await asyncio.wait_for(download_vxtwitter(link.post_id or "", target, max_bytes), timeout=120)
-                    code = 0 if count else 1
-                except TimeoutError:
-                    code, error = -1, "zaman aşımı"
-            elif name == "indownio":
-                try:
-                    count, error = await asyncio.wait_for(download_indownio(link, target, max_bytes), timeout=150)
-                    code = 0 if count else 1
-                except TimeoutError:
-                    code, error = -1, "zaman aşımı"
-            elif name in {"indown", "tiktokio", "rapidsave", "btch", "vette", "embed", "threads-page", "threadsdl"}:
-                try:
-                    count, error = await asyncio.wait_for(download_web(name, link, target, max_bytes, cookie_file), timeout=90)
-                    code = 0 if count else 1
-                except TimeoutError:
-                    code, error = -1, "zaman aşımı"
+                    code, error = await exec_task
+                except BaseException:
+                    raise
+                # Emit files that were already stable by completion time.
+                ready = await _stream_ready(target, sizes)
+                if ready:
+                    await _emit_stream_files(name, ready, allow_claim=allow_claim)
             else:
-                try:
-                    count, error = await asyncio.wait_for(download_cobalt(link.url, target, max_bytes, cobalt_url, cobalt_key), timeout=150)
-                    code = 0 if count else 1
-                except TimeoutError:
-                    code, error = -1, "zaman aşımı"
+                code, error = await _execute_provider(name, link, target, max_bytes, cookie_file,
+                                                     cobalt_url, cobalt_key, gallery_rs_path)
             files = media_files(target, max_bytes)
             if files and code == 0:
                 BREAKERS.success(name, link.platform)
                 reported = True
                 await asyncio.to_thread(METRICS.record, link.platform, name, "success", int((time.monotonic() - started) * 1000))
                 LOG.info("Downloaded %s using %s (%d files)", link.platform, name, len(files))
+                # Emit any remaining files (e.g. stabilized only at final check).
+                if on_file is not None and stream_claim["winner"] in (None, name):
+                    await _emit_stream_files(name, files, allow_claim=True)
+                return files, name
+            # If files were already streamed to user from this provider, prefer partial success
+            # over discarding delivered content when the provider exits non-zero.
+            if on_file is not None and stream_claim["winner"] == name and stream_emitted and files:
+                BREAKERS.success(name, link.platform)
+                reported = True
+                await asyncio.to_thread(METRICS.record, link.platform, name, "success", int((time.monotonic() - started) * 1000))
+                LOG.warning("Provider %s for %s exited with code %s after streaming %d file(s); delivering partial result",
+                            name, link.platform, code, len(files))
+                await _emit_stream_files(name, files, allow_claim=True)
                 return files, name
             fault = provider_fault(error)
             opened = BREAKERS.failure(name, link.platform) if fault else None
@@ -411,7 +511,7 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         await _finish((files, provider))
         return files, provider
 
-    async def race_providers(names: tuple[str, ...]) -> tuple[list[Path], str] | None:
+    async def race_providers(names: tuple[str, ...], *, stream: bool | None = None) -> tuple[list[Path], str] | None:
         """Preferred provider first; hedge with the rest only if it is slow/fails."""
         variant = provider_variant(link)
         key = f"{link.platform}:{variant}" if variant else link.platform
@@ -419,12 +519,165 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         ordered = await provider_memory.ranked(link.platform, names)
         grace = await asyncio.to_thread(provider_memory.hedge_seconds, 8.0,
                                         platform=link.platform, provider=preferred)
-        result = await first_success(ordered, attempt, stagger=0, priority=preferred, grace=grace)
+        do_stream = on_file is not None if stream is None else (stream and on_file is not None)
+        if not do_stream:
+            result = await first_success(ordered, attempt, stagger=0, priority=preferred, grace=grace)
+            if result is not None:
+                provider_memory.remember(key, result[1])
+            else:
+                provider_memory.forget(key)
+            return result
+        result = await _race_streaming(ordered, preferred, grace)
         if result is not None:
             provider_memory.remember(key, result[1])
         else:
             provider_memory.forget(key)
         return result
+
+    def _partial_stream_result() -> tuple[list[Path], str] | None:
+        winner = stream_claim["winner"]
+        if not winner or not stream_emitted:
+            return None
+        files = [p for p in sorted(stream_emitted) if p.is_file() and p.stat().st_size > 0]
+        if files:
+            return files, winner
+        # fall back to whatever is in winner directory
+        target = folder / winner
+        if target.is_dir():
+            files = media_files(target, max_bytes)
+            if files:
+                return files, winner
+        return None
+
+    async def _race_all_streaming(names: list[str], *, stagger: float = 0.0) -> tuple[list[Path], str] | None:
+        tasks: dict[str, asyncio.Task] = {}
+
+        async def run(index: int, name: str) -> tuple[list[Path], str] | None:
+            if index and stagger:
+                await asyncio.sleep(index * stagger)
+            # if someone already claimed, don't start new competitors
+            if stream_claim["winner"] and stream_claim["winner"] != name:
+                return None
+            task = asyncio.current_task()
+            if task is not None:
+                tasks[name] = task
+                stream_race_tasks[name] = task
+            try:
+                return await attempt(name, stream=True, allow_claim=True)
+            finally:
+                tasks.pop(name, None)
+                stream_race_tasks.pop(name, None)
+
+        created = [asyncio.create_task(run(i, name)) for i, name in enumerate(names)]
+        try:
+            pending = set(created)
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    try:
+                        result = task.result()
+                    except BaseException:
+                        result = None
+                    if result is not None:
+                        return result
+                    # if winner claimed but this task failed, check if winner is still running
+                    winner = stream_claim["winner"]
+                    if winner:
+                        winner_task = tasks.get(winner) or stream_race_tasks.get(winner)
+                        if winner_task and not winner_task.done():
+                            if winner_task in pending:
+                                continue
+                            # external winner (e.g. primary in hedge) still running
+                            while pending:
+                                _, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                            while not winner_task.done():
+                                await asyncio.sleep(0.2)
+                            try:
+                                wres = winner_task.result()
+                            except BaseException:
+                                wres = None
+                            return wres or _partial_stream_result()
+                        if winner_task and winner_task.done():
+                            try:
+                                wres = winner_task.result()
+                            except BaseException:
+                                wres = None
+                            return wres or _partial_stream_result()
+                        # winner task not in our tracking but claimed - partial
+                        return _partial_stream_result()
+            return _partial_stream_result()
+        finally:
+            for task in created:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*created, return_exceptions=True)
+
+    async def _race_streaming(ordered: list[str], priority: str | None, grace: float) -> tuple[list[Path], str] | None:
+        providers = list(ordered)
+        if priority is None or priority not in providers:
+            return await _race_all_streaming(providers)
+
+        rest = [name for name in providers if name != priority]
+        primary = asyncio.create_task(attempt(priority, stream=True, allow_claim=True))
+        stream_race_tasks[priority] = primary
+        try:
+            if grace > 0:
+                done, _ = await asyncio.wait({primary}, timeout=grace)
+            else:
+                await asyncio.wait({primary})
+                done = {primary}
+            if primary in done:
+                try:
+                    result = primary.result()
+                except BaseException:
+                    result = None
+                if result is not None:
+                    return result
+                if stream_claim["winner"] == priority and stream_emitted:
+                    return _partial_stream_result()
+                if not rest:
+                    return _partial_stream_result()
+                # reset claim state only if nothing was emitted
+                if not stream_emitted:
+                    stream_claim["winner"] = None
+                return await _race_all_streaming(rest)
+
+            # grace expired, primary still running
+            if stream_claim["winner"] == priority:
+                try:
+                    result = await primary
+                except BaseException:
+                    result = None
+                return result or _partial_stream_result()
+
+            # hedge: run rest in parallel with primary
+            if not rest:
+                try:
+                    result = await primary
+                except BaseException:
+                    result = None
+                return result or _partial_stream_result()
+            others = asyncio.create_task(_race_all_streaming(rest))
+            try:
+                pending = {primary, others}
+                while pending:
+                    finished, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for task in finished:
+                        try:
+                            result = task.result()
+                        except BaseException:
+                            result = None
+                        if result is not None:
+                            return result
+                return _partial_stream_result()
+            finally:
+                others.cancel()
+                await asyncio.gather(others, return_exceptions=True)
+        finally:
+            stream_race_tasks.pop(priority, None)
+            if not primary.done():
+                primary.cancel()
+                await asyncio.gather(primary, return_exceptions=True)
 
     try:
         if canonical and "/share/p/" in original_link.url:
@@ -540,6 +793,9 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
                     result = await race_providers(providers)
                     if result is not None:
                         return await _success(result[0], result[1])
+                    partial = _partial_stream_result()
+                    if partial:
+                        return await _success(partial[0], partial[1])
                     if oversize:
                         raise DownloadError("Medya Discord yükleme sınırını aşıyor.")
                     if bot_check:
@@ -568,6 +824,9 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
         result = await race_providers(providers)
         if result is not None:
             return await _success(result[0], result[1])
+        partial = _partial_stream_result()
+        if partial:
+            return await _success(partial[0], partial[1])
         if oversize:
             raise DownloadError("Medya Discord yükleme sınırını aşıyor.")
         if bot_check and link.platform == "youtube":
