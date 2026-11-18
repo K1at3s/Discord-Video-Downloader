@@ -1210,18 +1210,6 @@ class MediaBot(discord.Client):
             return await self._handle_x(message, link, status_message=status_message)
         caption_task = asyncio.create_task(fetch_caption(link, self.cookie_file))
 
-        async def caption_or_none(timeout: float | None = None) -> str | None:
-            try:
-                if timeout is None:
-                    return await caption_task
-                return await asyncio.wait_for(asyncio.shield(caption_task), timeout=timeout)
-            except TimeoutError:
-                LOG.info("Caption fetch timed out for %s; sending without waiting longer", link.platform)
-                return None
-            except Exception:
-                LOG.exception("Caption unavailable for %s", link.platform)
-                return None
-
         with tempfile.TemporaryDirectory(prefix="discord-media-") as tmp:
             folder = Path(tmp)
             media: list[Path] = []
@@ -1233,30 +1221,132 @@ class MediaBot(discord.Client):
             uploaded: set[Path] = set()
             batches_sent = 0
             caption: str | None = None
+            caption_resolved = False
+            caption_pending = False
             chunks: list[str] = []
+            first_media_message: discord.Message | None = None
+            first_media_batch: list[Path] = []
+            caption_included = False
+            caption_patch_task: asyncio.Task | None = None
 
-            async def ensure_caption(timeout: float | None = 2.0) -> None:
-                nonlocal caption, chunks
-                if caption is None:
-                    caption = await caption_or_none(timeout=timeout)
-                    chunks = display_chunks(caption)
+            async def resolve_caption(*, timeout: float | None = None, wait: bool = False) -> None:
+                nonlocal caption, caption_resolved, caption_pending, chunks
+                if caption_resolved:
+                    return
+                try:
+                    if wait or timeout is None:
+                        caption = await caption_task
+                        caption_resolved = True
+                        caption_pending = False
+                    elif caption_task.done():
+                        caption = await caption_task
+                        caption_resolved = True
+                        caption_pending = False
+                    else:
+                        caption = await asyncio.wait_for(asyncio.shield(caption_task), timeout=timeout)
+                        caption_resolved = True
+                        caption_pending = False
+                except TimeoutError:
+                    LOG.info("Caption fetch timed out for %s; will patch later if available", link.platform)
+                    caption_pending = not caption_task.done()
+                    if not caption_pending:
+                        try:
+                            caption = await caption_task
+                        except Exception:
+                            caption = None
+                        caption_resolved = True
+                    return
+                except Exception:
+                    LOG.exception("Caption unavailable for %s", link.platform)
+                    caption = None
+                    caption_resolved = True
+                    caption_pending = False
+                chunks = display_chunks(caption)
+
+            def _track_caption_patch_task(task: asyncio.Task) -> None:
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    LOG.exception("Caption patch task failed for %s", link.platform)
+
+            async def maybe_patch_caption() -> None:
+                nonlocal caption, caption_resolved, caption_pending, chunks, caption_included
+                if first_media_message is None or caption_included or not caption_pending:
+                    return
+                try:
+                    caption = await caption_task
+                except Exception:
+                    caption = None
+                caption_resolved = True
+                caption_pending = False
+                chunks = display_chunks(caption)
+                if not caption or not chunks:
+                    try:
+                        await first_media_message.edit(view=media_gallery_view(
+                            link.platform, first_media_batch, None, link.url, part=1,
+                            show_missing_caption=True,
+                        ))
+                    except discord.HTTPException:
+                        pass
+                    return
+                try:
+                    await first_media_message.edit(view=media_gallery_view(
+                        link.platform, first_media_batch, chunks[0], link.url, part=1,
+                        show_missing_caption=False,
+                    ))
+                    caption_included = True
+                except discord.HTTPException as exc:
+                    LOG.warning("Caption edit failed for %s: %s", link.platform, exc)
+                    return
+                for index, text_chunk in enumerate(chunks[1:], batches_sent + 1):
+                    try:
+                        await self._reply(message, view=media_gallery_view(
+                            link.platform, [], text_chunk, link.url, part=index,
+                            show_missing_caption=False,
+                        ))
+                    except discord.HTTPException as exc:
+                        LOG.warning("Caption continuation send failed for %s: %s", link.platform, exc)
+                        break
+
+            def schedule_caption_patch() -> None:
+                nonlocal caption_patch_task
+                if caption_patch_task or first_media_message is None or caption_included or not caption_pending:
+                    return
+                caption_patch_task = asyncio.create_task(maybe_patch_caption())
+                caption_patch_task.add_done_callback(_track_caption_patch_task)
 
             async def send_paths(paths: list[Path]) -> None:
-                nonlocal batches_sent
+                nonlocal batches_sent, first_media_message, first_media_batch, caption_included
                 batch = [p for p in paths if p not in uploaded and p.is_file()]
                 if not batch:
                     return
-                await ensure_caption(timeout=2.0 if batches_sent == 0 else 0.5)
+                if batches_sent == 0:
+                    await resolve_caption(timeout=2.0)
                 batches_sent += 1
+                is_first = first_media_message is None
+                show_missing = caption_resolved or (not caption_pending and is_first)
+                if is_first and caption_pending:
+                    show_missing = False
                 if status_message:
                     await set_status(f"📤 {batches_sent}. grup gönderiliyor ({len(sent_files) + len(batch)} dosya)…")
-                view = media_gallery_view(link.platform, batch,
-                                          chunks[0] if batches_sent == 1 and chunks else None,
-                                          link.url, part=batches_sent)
-                await self._reply(message, files=batch, view=view)
+                view = media_gallery_view(
+                    link.platform, batch,
+                    chunks[0] if is_first and caption_resolved and chunks else None,
+                    link.url, part=batches_sent,
+                    show_missing_caption=show_missing,
+                )
+                sent = await self._reply(message, files=batch, view=view)
                 for p in batch:
                     uploaded.add(p)
                 sent_files.extend(batch)
+                if is_first:
+                    first_media_message = sent
+                    first_media_batch = list(batch)
+                    caption_included = bool(caption_resolved and caption)
+                    if caption_pending and not caption_included:
+                        schedule_caption_patch()
 
             async def on_stream_file(paths: list[Path]) -> None:
                 # Upload streamed files promptly (progressive delivery).
@@ -1274,13 +1364,14 @@ class MediaBot(discord.Client):
                     error = exc
                     media = []
                 except BaseException:
-                    if not caption_task.done():
+                    if caption_patch_task is None and not caption_task.done():
                         caption_task.cancel()
-                    await asyncio.gather(caption_task, return_exceptions=True)
+                    if caption_patch_task is None:
+                        await asyncio.gather(caption_task, return_exceptions=True)
                     raise
 
                 if not media and not sent_files:
-                    caption = await caption_or_none()
+                    await resolve_caption(wait=True)
                     preview = await self._reddit_message_preview(message, link) if link.platform == "reddit" else Preview()
                     if not preview.has_content:
                         preview = await fetch_preview(link)
@@ -1300,18 +1391,49 @@ class MediaBot(discord.Client):
                 for batch in attachment_batches(remaining):
                     await send_paths(batch)
 
-                await ensure_caption(timeout=None)
-                for index, text_chunk in enumerate(chunks[1:], batches_sent + 1):
-                    await self._reply(message, view=media_gallery_view(link.platform, [], text_chunk,
-                                                                       link.url, part=index))
+                if first_media_message and caption_included and not caption_resolved:
+                    # shouldn't happen, but ensure state
+                    await resolve_caption(wait=True)
+
+                if caption_pending and first_media_message and not caption_included:
+                    # Caption still pending after delivery; patch/edit in background when ready.
+                    schedule_caption_patch()
+                else:
+                    if not caption_resolved:
+                        await resolve_caption(wait=True)
+                    # If caption resolved only after sends (e.g. no media path handled above),
+                    # or was included, send any continuation chunks now.
+                    if caption_resolved and chunks and caption_included:
+                        for index, text_chunk in enumerate(chunks[1:], batches_sent + 1):
+                            await self._reply(message, view=media_gallery_view(
+                                link.platform, [], text_chunk, link.url, part=index,
+                                show_missing_caption=False,
+                            ))
+                    elif caption_resolved and chunks and first_media_message and not caption_included:
+                        # Caption became available but was not included in first message; patch now.
+                        try:
+                            await first_media_message.edit(view=media_gallery_view(
+                                link.platform, first_media_batch, chunks[0], link.url, part=1,
+                                show_missing_caption=False,
+                            ))
+                            caption_included = True
+                            for index, text_chunk in enumerate(chunks[1:], batches_sent + 1):
+                                await self._reply(message, view=media_gallery_view(
+                                    link.platform, [], text_chunk, link.url, part=index,
+                                    show_missing_caption=False,
+                                ))
+                        except discord.HTTPException as exc:
+                            LOG.warning("Caption edit failed for %s: %s", link.platform, exc)
+
                 if status_message and (sent_files or media):
                     await set_status(f"✅ {len(sent_files) or len(media)} dosya gönderildi.")
                 total_bytes = sum(p.stat().st_size for p in media if p.is_file())
                 return "success", media, None, total_bytes
             finally:
-                if not caption_task.done():
-                    caption_task.cancel()
-                await asyncio.gather(caption_task, return_exceptions=True)
+                if caption_patch_task is None:
+                    if not caption_task.done():
+                        caption_task.cancel()
+                    await asyncio.gather(caption_task, return_exceptions=True)
 
     async def _reddit_message_preview(self, message: discord.Message, link: PostLink) -> Preview:
         preview = reddit_embed_preview(link, getattr(message, "embeds", []))
