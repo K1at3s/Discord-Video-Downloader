@@ -21,7 +21,7 @@ Discord sohbetindeki sosyal medya bağlantılarını algılayıp medyayı ve eri
 
 Profil, arama, tüm albüm ve oynatma listesi bağlantıları topluca indirilmez. Özel gönderiler, oturum isteyen içerikler ve bölgesel engeller başarısız olabilir.
 
-![Yeni medya kartı tasarımı önizlemesi](card-preview.png)
+![X kartı örneği](card-preview.png)
 
 ## Gereksinimler
 
