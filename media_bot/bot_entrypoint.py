@@ -11,6 +11,7 @@ import discord
 from dotenv import load_dotenv
 
 from .bot_runtime import _bounded_int, _configure_logging, _positive_int, _prepare_temp_dir
+from .card_cache import CARD_CACHE
 from .guild_settings import SETTINGS
 from .highlight_state import HIGHLIGHTS
 from .maintenance import MAINTENANCE, env_enabled
@@ -63,6 +64,11 @@ def main() -> None:
             ttl=_positive_int("MEDIA_CACHE_TTL_MINUTES", 360, 10080) * 60,
             max_bytes=_positive_int("MEDIA_CACHE_MAX_MB", 1024, 10240) * 1024 * 1024,
         )
+        CARD_CACHE.configure(
+            database_path.parent / "card_cache",
+            ttl=_positive_int("CARD_CACHE_TTL_MINUTES", 30, 1440) * 60,
+            max_bytes=_positive_int("CARD_CACHE_MAX_MB", 256, 4096) * 1024 * 1024,
+        )
         HIGHLIGHTS.configure(
             database_path,
             cache_ttl=_positive_int("HIGHLIGHT_CACHE_TTL_HOURS", 12, 168) * 3600,
@@ -78,6 +84,8 @@ def main() -> None:
             upload_bytes=_bounded_int("MAX_UPLOAD_MB", 0, 0, 500) * 1024 * 1024,
             max_links=_positive_int("MAX_LINKS_PER_MESSAGE", 3, 10),
             concurrency=_positive_int("MAX_CONCURRENT_JOBS", 2, 10),
+            user_hourly_limit=_bounded_int("USER_HOURLY_LIMIT", 30, 0, 10000),
+            user_daily_limit=_bounded_int("USER_DAILY_LIMIT", 200, 0, 100000),
             command_guild_id=_bounded_int("COMMAND_GUILD_ID", 0, 0, 2**63 - 1) or None,
             cookie_file=cookie_file,
             cobalt_url=cobalt_url,

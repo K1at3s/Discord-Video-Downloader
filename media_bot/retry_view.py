@@ -8,6 +8,7 @@ from pathlib import Path
 
 import discord
 
+from . import i18n
 from .links import PostLink
 from .maintenance import MAINTENANCE
 from .request_log import REQUESTS
@@ -38,7 +39,8 @@ class RetryView(discord.ui.View):
         owner_id = getattr(self.bot, "owner_id", None)
         if interaction.user.id != self.source_message.author.id and interaction.user.id != owner_id:
             await interaction.response.send_message(
-                "Bu bağlantıyı yalnızca paylaşan kişi yeniden deneyebilir.", ephemeral=True
+                i18n.t("retry_not_owner", i18n.locale_for_message(self.source_message)),
+                ephemeral=True,
             )
             return False
         if MAINTENANCE.active and interaction.user.id != owner_id:
@@ -95,12 +97,13 @@ class RetryView(discord.ui.View):
                 bytes=sum(p.stat().st_size for p in files if p.is_file()),
             )
 
+        locale = i18n.locale_for_message(self.source_message)
         if outcome == "pending":
-            message = "🔁 Yeniden deneme başlatıldı; devam etmek için yeni mesajdaki seçenekleri kullanın."
+            message = i18n.t("retry_started", locale)
         elif outcome == "success":
-            message = "✅ Yeniden deneme başarılı."
+            message = i18n.t("retry_success", locale)
         else:
-            message = "❌ Yeniden deneme de başarısız oldu."
+            message = i18n.t("retry_failed", locale)
             self._set_disabled(False)
             try:
                 await interaction.message.edit(view=self)

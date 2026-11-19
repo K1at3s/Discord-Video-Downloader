@@ -13,13 +13,16 @@ from urllib.parse import urlsplit
 import discord
 import httpx
 
+from . import i18n
 from .adult import channel_is_nsfw, istanbul_day
 from .discord_support import ThreadMessage, VIDEO_SUFFIXES
 from .download import DownloadError
+from .errors import user_message
 from .guild_settings import QUALITY_CHOICES, SETTINGS
 from .links import PostLink
 from .limits import attachment_batches
 from .metadata_fallback import Preview
+from .progress import ProgressReporter
 from .reddit_post import RedditPost
 from .youtube_view import YoutubeChoiceView
 
@@ -77,43 +80,49 @@ class LinkHandlersMixin:
 
     async def _handle_link(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]] | tuple[str, list[Path], YoutubeChoiceView]:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = i18n.locale_for_message(message)
+
         async def set_status(text: str) -> None:
             if not status_message:
                 return
             try:
                 await status_message.edit(content=text)
-            except discord.HTTPException:
+            except (discord.HTTPException, AttributeError, TypeError):
                 pass
 
         if link.platform == "threads":
-            await set_status("⏳ Bağlantı çözümleniyor...")
+            await set_status(i18n.t("resolving", locale))
             link = await B.resolve_threads_link(link, self.cookie_file) or link
             if highlight := B.highlight_post_link(link.url):
                 # Threads-only short links like /s/highlight:<ig_id> point at an
                 # Instagram highlight album, so hand off to the Instagram flow.
                 link = highlight
         if link.platform == "spotify":
-            await set_status("⏳ Parça hazırlanıyor...")
+            await set_status(i18n.t("preparing", locale))
             return await self._handle_spotify(message, link, status_message=status_message)
         if link.platform == "bluesky":
-            await set_status("⏳ Gönderi alınıyor...")
+            await set_status(i18n.t("preparing", locale))
             return await self._handle_bluesky(message, link, status_message=status_message)
         if link.platform == "reddit":
-            await set_status("⏳ Gönderi hazırlanıyor...")
+            await set_status(i18n.t("preparing", locale))
             return await self._handle_reddit(message, link, status_message=status_message)
         if link.platform == "youtube":
             limit = B.upload_limit(message, self.upload_bytes)
             quality = self._youtube_quality(message)
             if quality == "sor":
                 view = B.YoutubeChoiceView(bot=self, source_message=message, link=link,
-                                         title="YouTube videosu", upload_limit=limit)
+                                         title=i18n.t("youtube_title", locale),
+                                         upload_limit=limit)
                 view.prompt_message = await message.reply(view=view, mention_author=False, suppress_embeds=True)
                 return "pending", [], view
             started = time.monotonic()
             status = None
             try:
                 status = await message.reply(
-                    view=B.status_view("YouTube videosu", f"⏳ **{quality}** hazırlanıyor…"),
+                    view=B.status_view(
+                        i18n.t("youtube_title", locale),
+                        i18n.t("youtube_preparing", locale, quality=quality),
+                    ),
                     mention_author=False, suppress_embeds=True,
                 )
             except discord.HTTPException as exc:
@@ -122,14 +131,17 @@ class LinkHandlersMixin:
                 self, message, link, quality, limit, started=started,
             )
             if status:
-                text = (f"✅ **{detail}** gönderildi." if ok else f"❌ {detail[:300]}")
+                text = (i18n.t("youtube_sent", locale, detail=detail)
+                        if ok else f"❌ {detail[:300]}")
                 try:
-                    await status.edit(view=B.status_view("YouTube videosu", text))
+                    await status.edit(view=B.status_view(
+                        i18n.t("youtube_title", locale), text
+                    ))
                 except discord.HTTPException as exc:
                     LOG.warning("YouTube durum kartı güncellenemedi: %s", exc)
             return ("success" if ok else "failure"), files
         if link.platform == "x":
-            await set_status("⏳ Gönderi hazırlanıyor...")
+            await set_status(i18n.t("preparing", locale))
             return await self._handle_x(message, link, status_message=status_message)
         caption_task = asyncio.create_task(B.fetch_caption(link, self.cookie_file))
 
@@ -138,7 +150,7 @@ class LinkHandlersMixin:
             media: list[Path] = []
             error: DownloadError | None = None
             user_id = getattr(getattr(message, "author", None), "id", None)
-            await set_status("⏳ Medya indiriliyor...")
+            await set_status(i18n.t("downloading", locale))
             limit_bytes = B.upload_limit(message, self.upload_bytes)
             sent_files: list[Path] = []
             uploaded: set[Path] = set()
@@ -282,7 +294,10 @@ class LinkHandlersMixin:
                 if is_first and caption_pending:
                     show_missing = False
                 if status_message:
-                    await set_status(f"📤 {batches_sent}. grup gönderiliyor ({len(sent_files) + len(batch)} dosya)…")
+                    await set_status(i18n.t(
+                        "progress_uploading_group", locale,
+                        count=batches_sent, files=len(sent_files) + len(batch),
+                    ))
                 view = B.media_gallery_view(
                     link.platform, batch,
                     chunks[0] if is_first and caption_resolved and chunks else None,
@@ -333,9 +348,14 @@ class LinkHandlersMixin:
                         return "success", [], None, 0
                     else:
                         if link.platform == "threads" and re.search(r"/(?:share|t|s)/", link.url):
-                            await self._reply(message, "Threads paylaşım bağlantısı çözülemedi; Threads gönderiyi bot için giriş sayfasına yönlendirmiş olabilir.", view=B.source_button(link.url))
+                            await self._reply(message, i18n.t("threads_unresolved", locale),
+                                              view=B.source_button(link.url))
                         else:
-                            await self._reply(message, f"{link.platform.upper()}: {error or 'Medya bulunamadı.'}")
+                            await self._reply(
+                                message,
+                                user_message(str(error) if error else "no media", locale,
+                                             platform=link.platform.upper()),
+                            )
                         return "failure", [], None, 0
 
                 if (media or sent_files) and not caption:
@@ -378,7 +398,8 @@ class LinkHandlersMixin:
                         ), as_reply=False)
 
                 if status_message and (sent_files or media):
-                    await set_status(f"✅ {len(sent_files) or len(media)} dosya gönderildi.")
+                    await set_status(i18n.t("files_sent", locale,
+                                            count=len(sent_files) or len(media)))
                 total_bytes = sum(p.stat().st_size for p in media if p.is_file())
                 return "success", media, None, total_bytes
             finally:
@@ -405,12 +426,14 @@ class LinkHandlersMixin:
 
     async def _handle_bluesky(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = i18n.locale_for_message(message)
+
         async def set_status(text: str) -> None:
             if not status_message:
                 return
             try:
                 await status_message.edit(content=text)
-            except discord.HTTPException:
+            except (discord.HTTPException, AttributeError, TypeError):
                 pass
 
         try:
@@ -418,23 +441,24 @@ class LinkHandlersMixin:
         except httpx.HTTPError as exc:
             LOG.warning("Bluesky API unavailable: %s", exc)
             status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-            text = ("Bluesky hız sınırına ulaştı; kısa süre sonra tekrar dene." if status == 429 else
-                    "Bluesky gönderisi bulunamadı veya erişim engellendi." if status in {400, 401, 403, 404} else
-                    "Bluesky gönderisi şu anda alınamadı.")
-            await self._reply(message, text, view=B.source_button(link.url))
+            key = ("bluesky_rate_limit" if status == 429 else
+                   "bluesky_not_found" if status in {400, 401, 403, 404} else
+                   "bluesky_unavailable")
+            await self._reply(message, i18n.t(key, locale), view=B.source_button(link.url))
             return "failure", []
         if post is None:
-            await self._reply(message, "Bluesky gönderisi bulunamadı.", view=B.source_button(link.url))
+            await self._reply(message, i18n.t("bluesky_not_found", locale),
+                              view=B.source_button(link.url))
             return "failure", []
         if post.adult:
             if not channel_is_nsfw(message.channel):
-                await self._reply(message, "+18 Bluesky gönderileri yalnızca NSFW kanallarda kullanılabilir.")
+                await self._reply(message, i18n.t("adult_channel_only", locale))
                 return "failure", []
             if not await self.adult_quota.aclaim(message.author.id, istanbul_day()):
-                await self._reply(message, "Günlük +18 indirme hakkını kullandın.")
+                await self._reply(message, i18n.t("adult_daily_limit", locale))
                 return "failure", []
         with tempfile.TemporaryDirectory(prefix="discord-bluesky-") as tmp:
-            await set_status("⏳ Medya indiriliyor...")
+            await set_status(i18n.t("downloading", locale))
             try:
                 media = await B.download_bluesky_media(post, Path(tmp), B.upload_limit(message, self.upload_bytes))
             except OSError as exc:
@@ -442,7 +466,7 @@ class LinkHandlersMixin:
                 media = []
             caption = post.caption
             if post.media and not media:
-                caption += "\n\nMedya indirilemedi."
+                caption += "\n\n" + i18n.t("media_not_downloaded", locale)
             chunks = B.display_chunks(caption) or [""]
             batches = list(attachment_batches(media)) or [[]]
             total = len([b for b in batches if b])
@@ -450,9 +474,10 @@ class LinkHandlersMixin:
             for index, batch in enumerate(batches):
                 if batch and status_message and total > 1:
                     sent += 1
-                    await set_status(f"📤 {sent}/{total} grup gönderiliyor…")
+                    await set_status(i18n.t("progress_uploading_part", locale,
+                                            part=sent, total=total))
                 elif batch and status_message:
-                    await set_status("📤 Gönderiliyor…")
+                    await set_status(i18n.t("uploading", locale))
                 await self._reply(message, files=batch,
                                   view=B.media_gallery_view("bluesky", batch,
                                                           chunks[0] if index == 0 else None,
@@ -463,12 +488,13 @@ class LinkHandlersMixin:
                 await self._reply(message, view=B.media_gallery_view("bluesky", [], chunk,
                                                                    link.url, part=index,
                                                                    show_missing_caption=False))
-            if status_message and total > 1:
-                await set_status("✅ Gönderim tamamlandı.")
+            if status_message and batch:
+                await set_status(i18n.t("files_sent", locale, count=len(media)))
             return "success", media
 
     async def _handle_reddit(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = i18n.locale_for_message(message)
         preview = (await self._reddit_message_preview(message, link)
                    if not link.post_id else Preview())
         subreddit_prefix = re.match(r"^r/[^ ]+ · ", preview.title or "")
@@ -479,27 +505,29 @@ class LinkHandlersMixin:
             post = None
         adult = await B.reddit_adult_status(post)
         if adult is None:
-            await self._reply(message, "Reddit gönderisinin +18 durumu doğrulanamadı; güvenlik nedeniyle işlenmedi.")
+            await self._reply(message, i18n.t("adult_unverified", locale))
             return "failure", []
         if adult:
             if not channel_is_nsfw(message.channel):
-                await self._reply(message, "+18 Reddit gönderileri yalnızca NSFW olarak işaretlenmiş kanallarda kullanılabilir.")
+                await self._reply(message, i18n.t("adult_channel_only", locale))
                 return "failure", []
             day = istanbul_day()
             if not await self.adult_quota.aclaim(message.author.id, day):
-                await self._reply(message, "Günlük +18 indirme hakkını kullandın. Yeni hak Türkiye saatiyle gece yarısında açılır.")
+                await self._reply(message, i18n.t("adult_daily_limit", locale))
                 return "failure", []
-            B = __import__("media_bot.bot", fromlist=[""])
-            return await B.MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
-        B = __import__("media_bot.bot", fromlist=[""])
-        return await B.MediaBot._deliver_reddit(self, message, link, post, preview, title_hint, status_message=status_message)
+        return await B.MediaBot._deliver_reddit(
+            self, message, link, post, preview, title_hint,
+            status_message=status_message,
+        )
 
     async def _deliver_reddit(self, message: discord.Message, link: PostLink,
                               post: RedditPost | None, preview: Preview,
                               title_hint: str | None, status_message: discord.Message | None = None) -> tuple[str, list[Path]]:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = i18n.locale_for_message(message)
         source_url = post.url if post else link.url
         media_files: list[Path] = []
+        progress = ProgressReporter(status_message, locale)
         with tempfile.TemporaryDirectory(prefix="discord-reddit-") as tmp:
             if not post and not preview.has_content:
                 preview = await self._reddit_message_preview(message, link)
@@ -508,7 +536,7 @@ class LinkHandlersMixin:
             display_post = post
             if not display_post and preview.has_content:
                 subreddit = re.search(r"/r/([^/]+)", urlsplit(link.url).path, re.IGNORECASE)
-                preview_title = preview.title or "Reddit gönderisi"
+                preview_title = preview.title or "Reddit"
                 if " · " in preview_title and preview_title.startswith("r/"):
                     preview_title = preview_title.split(" · ", 1)[1]
                 display_post = RedditPost(
@@ -518,8 +546,21 @@ class LinkHandlersMixin:
             if display_post:
                 bot_user = getattr(self, "user", None)
                 footer = f"@{bot_user.name}" if bot_user else "Discord Video Bot"
-                cards = await asyncio.to_thread(B.render_reddit_cards, display_post, Path(tmp) / "cards",
-                                                footer, preview_only=post is None)
+                variant = f"v1|{'preview' if post is None else 'full'}|{footer}"
+                cache_key = post.url if post else link.url
+                cards: list[Path] = []
+                cached = await asyncio.to_thread(B.CARD_CACHE.get, "reddit", cache_key, variant)
+                if cached is not None:
+                    cards = await asyncio.to_thread(B.CARD_CACHE.copy_to, cached, Path(tmp) / "cards")
+                if not cards:
+                    cards = await asyncio.to_thread(
+                        B.render_reddit_cards, display_post, Path(tmp) / "cards",
+                        footer, preview_only=post is None,
+                    )
+                    if cards:
+                        await asyncio.to_thread(
+                            B.CARD_CACHE.put, "reddit", cache_key, cards, variant
+                        )
                 for index, batch in enumerate(attachment_batches(cards), 1):
                     await self._reply(
                         message, files=batch,
@@ -528,43 +569,47 @@ class LinkHandlersMixin:
                     )
                 delivered_any = True
             else:
-                await self._reply(message, "Reddit gönderi bilgisi alınamadı.", view=B.source_button(link.url))
+                await self._reply(message, i18n.t("reddit_no_info", locale),
+                                  view=B.source_button(link.url))
                 delivered_any = False
             if post and post.is_self is True:
                 return ("success" if delivered_any else "failure"), media_files
-            if status_message:
-                try:
-                    await status_message.edit(content="⏳ Medya indiriliyor...")
-                except discord.HTTPException:
-                    pass
+            await progress.downloading(force=True)
             try:
                 media_link = B.parse_link(source_url) or link
                 user_id = getattr(getattr(message, "author", None), "id", None)
+                estimate = await B.estimate_reddit_media_bytes(media_link)
+                await progress.set_estimate(estimate)
                 media, _ = await B.download_media(
                     media_link, Path(tmp), B.upload_limit(message, self.upload_bytes), self.cookie_file,
                     self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
-                    user_id=user_id,
+                    user_id=user_id, on_file=progress.on_file,
                 )
             except DownloadError:
                 return ("success" if delivered_any else "failure"), media_files
             media_files.extend(media)
+            total = len([batch for batch in attachment_batches(media)])
             for index, batch in enumerate(attachment_batches(media), 1):
+                await progress.uploading(part=index, total=total, force=True)
                 await self._reply(message, files=batch,
                                   view=B.media_gallery_view("reddit", batch, None, source_url,
                                                           part=index, show_missing_caption=False))
                 delivered_any = True
+            if media_files:
+                await progress.done(len(media_files))
             return ("success" if delivered_any else "failure"), media_files
 
     async def _handle_spotify(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = i18n.locale_for_message(message)
         try:
             track = await B.fetch_track(link)
             source = await B.find_audio_source(track)
             with tempfile.TemporaryDirectory(prefix="discord-spotify-") as tmp:
-                if status_message:
+                if status_message and getattr(status_message, "edit", None) is not None:
                     try:
-                        await status_message.edit(content="⏳ Ses indiriliyor...")
-                    except discord.HTTPException:
+                        await status_message.edit(content=i18n.t("downloading", locale))
+                    except (discord.HTTPException, AttributeError, TypeError):
                         pass
                 file, provider = await B.download_youtube(
                     source, Path(tmp), "mp3", B.upload_limit(message, self.upload_bytes),
@@ -577,11 +622,14 @@ class LinkHandlersMixin:
                 LOG.info("Spotify track delivered as MP3 via %s", provider)
                 return "success", [output]
         except DownloadError as exc:
-            await self._reply(message, f"Spotify parçası indirilemedi: {exc}", view=B.source_button(link.url))
+            await self._reply(message, i18n.t("spotify_failed", locale, error=str(exc)),
+                              view=B.source_button(link.url))
             return "failure", []
 
     async def _handle_x(self, message: discord.Message, link: PostLink, status_message: discord.Message | None = None) -> str | tuple[str, list[Path]]:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = i18n.locale_for_message(message)
+        progress = ProgressReporter(status_message, locale)
         with tempfile.TemporaryDirectory(prefix="discord-x-") as tmp:
             folder = Path(tmp)
             limit = B.upload_limit(message, self.upload_bytes)
@@ -589,34 +637,55 @@ class LinkHandlersMixin:
             media_task = None
             if post is None or B._has_media(post):
                 user_id = getattr(getattr(message, "author", None), "id", None)
-                if status_message:
-                    try:
-                        await status_message.edit(content="⏳ Medya indiriliyor...")
-                    except discord.HTTPException:
-                        pass
+                await progress.downloading(force=True)
+                if post:
+                    estimate = await B.estimate_urls_bytes(
+                        [url for url, _kind in B.x_media_urls(post)]
+                    )
+                    await progress.set_estimate(estimate)
                 media_task = asyncio.create_task(B.download_media(
                     link, folder / "media", limit, self.cookie_file,
                     self.cobalt_url, self.cobalt_key, self.gallery_rs_path,
-                    user_id=user_id,
+                    user_id=user_id, on_file=progress.on_file,
                 ))
             try:
                 card_sent = False
                 if post:
-                    card = folder / "x_gonderisi.png"
+                    card_path = folder / "x_gonderisi.png"
                     try:
                         bot_user = getattr(self, "user", None)
                         footer = f"@{bot_user.name}" if bot_user else "Discord Video Bot"
-                        await B.create_card(post, card, footer)
+                        variant = f"v1|{footer}"
+                        cached = await asyncio.to_thread(
+                            B.CARD_CACHE.get, "x", link.post_id or link.url, variant
+                        )
+                        if cached is not None:
+                            copied = await asyncio.to_thread(
+                                B.CARD_CACHE.copy_to, cached, folder / "card_cache"
+                            )
+                            if copied:
+                                card_path = copied[0]
+                        if not card_path.is_file():
+                            await B.create_card(post, card_path, footer)
+                            if card_path.is_file():
+                                await asyncio.to_thread(
+                                    B.CARD_CACHE.put, "x", link.post_id or link.url,
+                                    [card_path], variant,
+                                )
                     except Exception:
                         LOG.exception("Could not render X card")
                     else:
-                        if card.is_file() and 0 < card.stat().st_size <= limit:
-                            await self._reply(message, "**X gönderisi**", [card], view=B.source_button(link.url))
+                        if card_path.is_file() and 0 < card_path.stat().st_size <= limit:
+                            await self._reply(message, i18n.t("x_post", locale), [card_path],
+                                              view=B.source_button(link.url))
                             card_sent = True
 
                 if media_task is None:
                     if not card_sent:
-                        ok = await self._send_x_fallback(message, link, post, "Bu gönderide indirilecek medya yok.")
+                        ok = await self._send_x_fallback(
+                            message, link, post, i18n.t("error_no_media", locale, platform="X"),
+                            locale,
+                        )
                         return ("success" if ok else "failure"), []
                     return "success", []
 
@@ -624,12 +693,20 @@ class LinkHandlersMixin:
                     media, _ = await media_task
                 except DownloadError as exc:
                     if not card_sent:
-                        ok = await self._send_x_fallback(message, link, post, str(exc))
+                        ok = await self._send_x_fallback(
+                            message, link, post,
+                            user_message(str(exc), locale, platform="X"), locale,
+                        )
                         return ("success" if ok else "failure"), []
                     return "success", []
-                for index, chunk in enumerate(attachment_batches(media)):
-                    content = "**X medyası**" if index == 0 else "**X medyası** · devam"
+                batches = list(attachment_batches(media))
+                for index, chunk in enumerate(batches, 1):
+                    content = (i18n.t("x_media", locale) if index == 1
+                               else i18n.t("x_media_more", locale))
+                    await progress.uploading(part=index, total=len(batches), force=True)
                     await self._reply(message, content, chunk, view=B.source_button(link.url))
+                if media:
+                    await progress.done(len(media))
                 return "success", media
             finally:
                 if media_task is not None:
@@ -638,14 +715,15 @@ class LinkHandlersMixin:
                     await asyncio.gather(media_task, return_exceptions=True)
 
     async def _send_x_fallback(self, message: discord.Message, link: PostLink,
-                               post: dict | None, error: str) -> bool:
+                               post: dict | None, error: str,
+                               locale: str | None = None) -> bool:
         B = __import__("media_bot.bot", fromlist=[""])
+        locale = locale or i18n.locale_for_message(message)
         preview = (Preview(description=post.get("text")) if post else await B.fetch_preview(link))
         if preview.has_content:
             for embed in B.preview_embeds(link, preview):
                 await self._reply(message, embed=embed, view=B.source_button(link.url))
             return True
-        else:
-            await self._reply(message, f"X: {error}")
-            return False
+        await self._reply(message, error)
+        return False
 

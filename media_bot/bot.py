@@ -15,9 +15,11 @@ from .adult import AdultQuota, reddit_adult_status  # noqa: F401
 from .backup import backup_databases, database_paths
 from .bluesky import download_bluesky_media, fetch_bluesky_post  # noqa: F401
 from .captions import _clean, display_chunks, fetch_caption  # noqa: F401
+from .card_cache import CARD_CACHE
 from .circuit_breaker import BREAKERS
 from .cookiefile import cookie_report, cookie_warning
 from .cooldowns import Cooldowns
+from .direct_providers import x_media_urls  # noqa: F401
 from .download import DownloadError, download_media  # noqa: F401
 from . import i18n
 from .health import start_health_server
@@ -33,8 +35,10 @@ from .provider_metrics import METRICS
 from .reddit_card import render_reddit_cards  # noqa: F401
 from .reddit_post import RedditPost, fetch_reddit_post  # noqa: F401
 from .request_log import REQUESTS  # noqa: F401
+from .sizes import estimate_reddit_media_bytes, estimate_urls_bytes  # noqa: F401
 from .spotify import fetch_track, find_audio_source  # noqa: F401
 from .threads_links import highlight_post_link, resolve_threads_link  # noqa: F401
+from .user_quota import UserQuota
 from .video_fit import fit_video  # noqa: F401
 from .x_card import create_card, fetch_post  # noqa: F401
 from .youtube import download_youtube  # noqa: F401
@@ -85,7 +89,7 @@ Bağlantı gönder: Instagram, Threads, TikTok, X, Facebook, Reddit, YouTube, Sp
 `/cache` · önbellek durumu
 `/hatalar [aralık]` · son hatalar (sahip)
 `/bakim [ac|kapat]` · bakım modu (sahip)
-`/ayar` · otomatik thread ve YouTube kalitesi (yönetici)
+`/ayar` · otomatik thread, YouTube kalitesi ve dil (yönetici)
 `/metrics` · sağlayıcı metrikleri
 
 Eski `!` komutları da çalışır (`!ayar`, `!ayar thread ac`)."""
@@ -105,7 +109,7 @@ def _extract_download_caption(folder: Path) -> str | None:
 
 
 class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discord.Client):
-    def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None):
+    def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None, user_hourly_limit: int = 30, user_daily_limit: int = 200):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
@@ -124,6 +128,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         self.concurrency = concurrency
         self.started_at = time.time()
         self.adult_quota = AdultQuota(self.database_path)
+        self.user_quota = UserQuota(self.database_path, user_hourly_limit, user_daily_limit)
         self._health_task: asyncio.Task | None = None
         self._health_skips = 0
         self._backup_task: asyncio.Task | None = None
@@ -207,6 +212,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         except (AttributeError, RuntimeError):
             ready = False
         cache = MEDIA_CACHE.stats()
+        cards = CARD_CACHE.stats()
         return {
             "status": "ok" if ready else "starting",
             "uptime_seconds": int(time.time() - self.started_at),
@@ -225,6 +231,14 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                 "hits": cache.get("hits", 0),
                 "misses": cache.get("misses", 0),
                 "stores": cache.get("stores", 0),
+            },
+            "card_cache": {
+                "enabled": cards.get("enabled"),
+                "entries": cards.get("entries", 0),
+                "bytes": cards.get("bytes", 0),
+                "hits": cards.get("hits", 0),
+                "misses": cards.get("misses", 0),
+                "stores": cards.get("stores", 0),
             },
         }
 

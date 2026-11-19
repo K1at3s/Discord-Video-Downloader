@@ -7,8 +7,10 @@ from types import SimpleNamespace
 
 import discord
 
+from . import i18n
+from .card_cache import CARD_CACHE
 from .circuit_breaker import BREAKERS
-from .guild_settings import SETTINGS, describe
+from .guild_settings import SETTINGS
 from .highlight_state import HIGHLIGHTS, format_wait
 from .maintenance import MAINTENANCE
 from .media_cache import MEDIA_CACHE
@@ -104,8 +106,8 @@ class AdminCommandsMixin:
         if not self._can_manage_guild(getattr(message, "author", None)):
             await self._reply(message, "Bu komut için **Sunucuyu yönet** izni gerekir.")
             return
-        usage = ("Kullanım: `!ayar` · `!ayar thread ac|kapat` · `!ayar yanit ac|kapat` · "
-                 "`!ayar youtube sor|mp3|360|720|1080` · `!ayar sifirla`")
+        locale = i18n.locale_for_message(message)
+        usage = i18n.t("settings_usage", locale)
         tokens = argument.split()
         changes: dict = {}
         index = 0
@@ -143,8 +145,24 @@ class AdminCommandsMixin:
                     await self._reply(message, usage)
                     return
                 index += 2
+            elif token in {"dil", "lang", "language", "locale"}:
+                if index + 1 >= len(tokens):
+                    await self._reply(message, usage)
+                    return
+                value = tokens[index + 1].lower()
+                mapping = {
+                    "tr": "tr", "turkce": "tr", "türkçe": "tr", "turkish": "tr",
+                    "en": "en", "english": "en", "ingilizce": "en", "auto": "auto",
+                    "otomatik": "auto", "varsayilan": "auto", "varsayılan": "auto",
+                }
+                if value not in mapping:
+                    await self._reply(message, usage)
+                    return
+                changes["locale"] = mapping[value]
+                index += 2
             elif token in {"sifirla", "sıfırla", "reset"}:
-                changes.update(auto_thread=False, youtube_quality="sor", reply_messages=True)
+                changes.update(auto_thread=False, youtube_quality="sor",
+                               reply_messages=True, locale="tr")
                 index += 1
             else:
                 await self._reply(message, usage)
@@ -154,7 +172,8 @@ class AdminCommandsMixin:
         except ValueError as exc:
             await self._reply(message, f"{exc}\nKalite: `sor`, `mp3`, `360`, `720`, `1080`")
             return
-        await self._reply(message, describe(settings))
+        shown_locale = settings.locale if settings.locale in {"tr", "en"} else locale
+        await self._reply(message, i18n.settings_message(settings, shown_locale, updated=bool(changes)))
 
     async def _reply_log_clear(self, message: discord.Message, argument: str) -> None:
         confirmed = "onay" in {token.lower() for token in argument.split()}
@@ -228,6 +247,16 @@ class AdminCommandsMixin:
         ]
         if media["stale"]:
             lines.append(f"♻️ Temizlenmeyi bekleyen eski kayıt: {media['stale']}")
+        cards = CARD_CACHE.stats()
+        if cards["enabled"]:
+            card_lookups = cards.get("hits", 0) + cards.get("misses", 0)
+            card_rate = (f"{(cards.get('hits', 0) / card_lookups) * 100:.0f}%"
+                         if card_lookups else "—")
+            lines.append(
+                f"X/Reddit kart: {cards['entries']} kayıt · {cards['files']} dosya · "
+                f"{_human_bytes(cards['bytes'])} (sınır {_human_bytes(cards['max_bytes'])}, "
+                f"TTL {ttl_text(cards['ttl'])}) · isabet {card_rate}"
+            )
         highlight = HIGHLIGHTS.cache.stats() if HIGHLIGHTS.cache else None
         if highlight is not None:
             lines.append(
@@ -243,10 +272,12 @@ class AdminCommandsMixin:
 
     async def _reply_cache_clear(self, message: discord.Message) -> None:
         media = MEDIA_CACHE.clear() if MEDIA_CACHE.enabled else 0
+        cards = CARD_CACHE.clear() if CARD_CACHE.enabled else 0
         highlight = HIGHLIGHTS.cache.clear() if HIGHLIGHTS.cache else 0
         await self._reply(
             message,
-            f"🧹 Önbellek temizlendi · genel medya: {media} kayıt · highlight: {highlight} kayıt",
+            f"🧹 Önbellek temizlendi · genel medya: {media} kayıt · "
+            f"X/Reddit kart: {cards} kayıt · highlight: {highlight} kayıt",
         )
 
     async def _reply_user_info(self, message: discord.Message, argument: str = "") -> None:

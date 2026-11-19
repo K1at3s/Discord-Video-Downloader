@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
+from .safety import is_safe_http_url
+
 URL_RE = re.compile(r"https?://[^\s<>\[\]()]+", re.IGNORECASE)
 
 
@@ -36,6 +38,8 @@ def _decode_instagram_short_token(token: str) -> str | None:
 
 def parse_link(raw: str) -> PostLink | None:
     raw = raw.rstrip(".,!?;:>\"'）]")
+    if not is_safe_http_url(raw):
+        return None
     try:
         parts = urlsplit(raw)
         host = (parts.hostname or "").lower().rstrip(".")

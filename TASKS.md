@@ -90,8 +90,32 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **İndirme öncesi YouTube kalite tahmini** — `youtube.suggest_choice()` yükleme limitine göre istenen kaliteyi önceden sınırlar (örn. küçük limitte 1080p→720p/360p), gereksiz indirme ve 413 denemelerini azaltır.
 - [x] **İndirme→yükleme akışını tam birleştirme** — `download_media` dosya-bazlı akış (`on_file` callback) ve tek-kazanan garanti modeliyle yeniden tasarlandı: yarışan sağlayıcılarda ilk kararlı medyayı üreten deneme kazanan ilan edilip diğer denemeler iptal edilir; kazananın yeni hazır dosyaları indirme sürerken Discord’a gönderilir. Genel bot akışı bu akışı kullanıyor; metrik/önbellek/breaker/kota/temizlik davranışı korunuyor. Tek dosyalı videolarda örtüşme sınırlı olabilir, çok dosyalı galerilerde asıl UX kazanımı sağlanır.
 
+## Yüksek/orta etki paketi — 19 Kasım 2026
+
+- [x] **X/Reddit kart önbelleği** — `media_bot/card_cache.py`; `CARD_CACHE_TTL_MINUTES`
+  (varsayılan 30) ve `CARD_CACHE_MAX_MB` (varsayılan 256). `/cache` ve `/cachetemizle`
+  kart istatistiklerini de gösterir/temizler.
+- [x] **Kullanıcı kotası** — `media_bot/user_quota.py`; `USER_HOURLY_LIMIT` (30) ve
+  `USER_DAILY_LIMIT` (200), `0` ilgili pencereyi kapatır. +18 kotası ayrı kalır,
+  bot sahibi muaftır; kota dolduğunda kalan süre yerelleştirilmiş mesajla bildirilir.
+- [x] **URL/SSRF güvenliği** — `media_bot/safety.py`; şema, kimlik bilgisi, port,
+  localhost/özel IP ve DNS cevapları kontrol edilir. Bağlantı ayrıştırma ve önizleme/
+  altyazı istekleri bu kontrolden geçer.
+- [x] **Hata UX** — `media_bot/errors.py`; sağlayıcı hataları özel/giriş, bot doğrulaması,
+  hız sınırı, zaman aşımı, boyut, bulunamadı ve desteklenmeyen olarak sınıflanır;
+  kullanıcıya ham hata yerine kısa TR/EN mesaj ve tekrar dene düğmesi gösterilir.
+- [x] **i18n (TR/EN)** — `media_bot/i18n.py`; sunucu bazlı `dil` ayarı (`tr`/`en`/`auto`,
+  varsayılan `tr`), durum/kota/hata/ayar metinleri ve `/ayar dil:` seçeneği.
+- [x] **X/Reddit ilerleme + boyut tahmini** — `media_bot/progress.py` ve
+  `media_bot/sizes.py`; `Content-Length`/`Content-Range` üzerinden yaklaşık toplam
+  boyut, indirilen dosya sayısı ve grup yükleme durumu canlı gösterilir.
+- [x] **Uzun işler için iptal** — `media_bot/cancel_view.py`; durum mesajındaki
+  `İptal` düğmesi yalnızca bağlantıyı paylaşan kullanıcı ve bot sahibi tarafından
+  kullanılabilir; görev iptal edilir ve mesaj güncellenir.
+- [x] **Test/CI genişletmesi** — kart önbelleği, kullanıcı kotası, SSRF kontrolleri,
+  hata sınıflandırma, ilerleme biçimlendirme ve dil ayarları için testler eklendi;
+  `ruff check` ve tüm test paketi CI'de çalışmaya devam eder.
+
 ## Sıradaki paketler
 
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
-- [ ] i18n (TR/EN) ve hata mesajlarının sadeleştirilmesi.
-- [ ] Diğer platformlarda (Reddit/X kart akışları) canlı ilerleme ve ön boyut tahmini genişletmesi.

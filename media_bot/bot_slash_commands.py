@@ -93,6 +93,7 @@ def register_commands(bot) -> None:
         otomatik_thread="Bağlantılar için otomatik thread açılsın mı? / Auto-create thread for media links",
         youtube="YouTube varsayılan kalite / Default YouTube quality",
         yanitla="Bot yanıtları mesaja reply olarak gönderilsin mi? / Reply to triggering message",
+        dil="Botun bu sunucudaki dili / Bot language in this server",
     )
     @discord.app_commands.choices(youtube=[
         discord.app_commands.Choice(name="Her zaman sor / Always ask", value="sor"),
@@ -100,11 +101,16 @@ def register_commands(bot) -> None:
         discord.app_commands.Choice(name="360p", value="360"),
         discord.app_commands.Choice(name="720p", value="720"),
         discord.app_commands.Choice(name="1080p", value="1080"),
+    ], dil=[
+        discord.app_commands.Choice(name="Türkçe", value="tr"),
+        discord.app_commands.Choice(name="English", value="en"),
+        discord.app_commands.Choice(name="Otomatik / Auto", value="auto"),
     ])
     async def ayar(interaction: discord.Interaction,
                    otomatik_thread: bool | None = None,
                    youtube: discord.app_commands.Choice[str] | None = None,
-                   yanitla: bool | None = None) -> None:
+                   yanitla: bool | None = None,
+                   dil: discord.app_commands.Choice[str] | None = None) -> None:
         locale = i18n.locale_code(interaction)
         guild = interaction.guild
         if guild is None:
@@ -114,7 +120,8 @@ def register_commands(bot) -> None:
         if not (permissions and permissions.manage_guild) and interaction.user.id != bot.owner_id:
             await interaction.response.send_message(i18n.t("manage_guild_required", locale), ephemeral=True)
             return
-        changed = otomatik_thread is not None or youtube is not None or yanitla is not None
+        changed = (otomatik_thread is not None or youtube is not None
+                   or yanitla is not None or dil is not None)
         try:
             if changed:
                 settings = SETTINGS.update(
@@ -122,14 +129,16 @@ def register_commands(bot) -> None:
                     auto_thread=otomatik_thread,
                     youtube_quality=youtube.value if youtube else None,
                     reply_messages=yanitla,
+                    locale=dil.value if dil else None,
                 )
             else:
                 settings = SETTINGS.get(guild.id)
         except ValueError:
             await interaction.response.send_message(i18n.t("invalid_quality", locale), ephemeral=True)
             return
+        shown_locale = settings.locale if settings.locale in {"tr", "en"} else locale
         await interaction.response.send_message(
-            i18n.settings_message(settings, locale, updated=changed),
+            i18n.settings_message(settings, shown_locale, updated=changed),
             ephemeral=True,
         )
 

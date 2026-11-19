@@ -14,7 +14,8 @@ from .sqlite_util import open_db
 LOG = logging.getLogger(__name__)
 
 QUALITY_CHOICES = ("sor", "mp3", "360", "720", "1080")
-DEFAULTS = {"auto_thread": False, "youtube_quality": "sor"}
+LOCALE_CHOICES = ("auto", "tr", "en")
+DEFAULTS = {"auto_thread": False, "youtube_quality": "sor", "locale": "tr"}
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class GuildSettings:
     auto_thread: bool = False
     youtube_quality: str = "sor"
     reply_messages: bool = True
+    locale: str = "tr"
 
 
 class GuildSettingsStore:
@@ -46,11 +48,14 @@ class GuildSettingsStore:
                 "auto_thread INTEGER NOT NULL DEFAULT 0, "
                 "youtube_quality TEXT NOT NULL DEFAULT 'sor', "
                 "reply_messages INTEGER NOT NULL DEFAULT 1, "
+                "locale TEXT NOT NULL DEFAULT 'tr', "
                 "updated_at INTEGER NOT NULL DEFAULT 0)"
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(guild_settings)")}
             if "reply_messages" not in columns:
                 db.execute("ALTER TABLE guild_settings ADD COLUMN reply_messages INTEGER NOT NULL DEFAULT 1")
+            if "locale" not in columns:
+                db.execute("ALTER TABLE guild_settings ADD COLUMN locale TEXT NOT NULL DEFAULT 'tr'")
 
     def get(self, guild_id: int) -> GuildSettings:
         if self.path is None or not guild_id:
@@ -58,7 +63,8 @@ class GuildSettingsStore:
         try:
             with self._lock, closing(open_db(self.path)) as db:
                 row = db.execute(
-                    "SELECT auto_thread, youtube_quality, reply_messages FROM guild_settings WHERE guild_id = ?",
+                    "SELECT auto_thread, youtube_quality, reply_messages, locale "
+                    "FROM guild_settings WHERE guild_id = ?",
                     (guild_id,),
                 ).fetchone()
         except Exception as exc:
@@ -68,7 +74,9 @@ class GuildSettingsStore:
             return GuildSettings()
         quality = row[1] if row[1] in QUALITY_CHOICES else "sor"
         reply_messages = True if row[2] is None else bool(row[2])
-        return GuildSettings(auto_thread=bool(row[0]), youtube_quality=quality, reply_messages=reply_messages)
+        locale = row[3] if row[3] in LOCALE_CHOICES else "tr"
+        return GuildSettings(auto_thread=bool(row[0]), youtube_quality=quality,
+                             reply_messages=reply_messages, locale=locale)
 
     def update(self, guild_id: int, **fields) -> GuildSettings:
         """Validate and persist a partial change, returning the new settings."""
@@ -83,6 +91,11 @@ class GuildSettingsStore:
             changes["youtube_quality"] = quality
         if "reply_messages" in fields and fields["reply_messages"] is not None:
             changes["reply_messages"] = bool(fields["reply_messages"])
+        if "locale" in fields and fields["locale"] is not None:
+            locale = str(fields["locale"]).strip().lower()
+            if locale not in LOCALE_CHOICES:
+                raise ValueError(f"Geçersiz dil: {locale}")
+            changes["locale"] = locale
         if not changes:
             return current
         updated = replace(current, **changes)
@@ -90,13 +103,15 @@ class GuildSettingsStore:
             try:
                 with self._lock, closing(open_db(self.path)) as db, db:
                     db.execute(
-                        "INSERT INTO guild_settings (guild_id, auto_thread, youtube_quality, reply_messages, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
+                        "INSERT INTO guild_settings (guild_id, auto_thread, youtube_quality, reply_messages, locale, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
                         "auto_thread = excluded.auto_thread, "
                         "youtube_quality = excluded.youtube_quality, "
                         "reply_messages = excluded.reply_messages, "
+                        "locale = excluded.locale, "
                         "updated_at = excluded.updated_at",
-                        (guild_id, int(updated.auto_thread), updated.youtube_quality, int(updated.reply_messages), int(time.time())),
+                        (guild_id, int(updated.auto_thread), updated.youtube_quality,
+                         int(updated.reply_messages), updated.locale, int(time.time())),
                     )
             except Exception as exc:
                 LOG.warning("Sunucu ayarları yazılamadı: %s", exc)

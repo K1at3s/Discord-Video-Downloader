@@ -11,6 +11,7 @@ import httpx
 from .direct_providers import _facebook_page, _Meta, allowed_media_url
 from .http import shared_client
 from .links import PostLink
+from .safety import safe_get
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ async def fetch_preview(link: PostLink) -> Preview:
             if link.platform == "facebook":
                 page = await _facebook_page(client, link.url)
             else:
-                response = await client.get(link.url)
+                response = await safe_get(client, link.url)
                 response.raise_for_status()
                 page = response.text
         return parse_preview(page, link.platform)

@@ -18,6 +18,7 @@ from .http import shared_client
 from .links import PostLink
 from .race import first_success
 from .reddit_post import fetch_reddit_post
+from .safety import safe_get
 from .threads_links import CONTENT_HEADERS, _threads_cookies
 
 LOG = logging.getLogger(__name__)
@@ -138,7 +139,7 @@ async def _fetch(link: PostLink, route: str, cookie_file: Path | None = None) ->
             if link.platform == "facebook":
                 page = await _facebook_page(client, link.url)
             else:
-                response = await client.get(link.url, follow_redirects=True)
+                response = await safe_get(client, link.url)
                 response.raise_for_status()
                 page = response.text[:5_000_000]
             return _page_caption(page, link.platform, allow_truncated=link.platform == "facebook")

@@ -103,6 +103,10 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 | `HIGHLIGHT_HEALTHCHECK_RESERVE` | `3` | Sağlık kontrolünün kullanıcılar için ayırdığı minimum bucket jetonu |
 | `MEDIA_CACHE_TTL_MINUTES` | `360` | Aynı URL tekrarları için genel medya önbelleği süresi (dakika); 6 saat, en fazla 7 gün |
 | `MEDIA_CACHE_MAX_MB` | `1024` | Genel medya önbelleği toplam boyut sınırı (MB) |
+| `CARD_CACHE_TTL_MINUTES` | `30` | X/Reddit kart PNG önbelleği süresi (dakika); en fazla 1 gün |
+| `CARD_CACHE_MAX_MB` | `256` | X/Reddit kart önbelleği toplam boyut sınırı (MB) |
+| `USER_HOURLY_LIMIT` | `30` | Kullanıcı başına saatlik genel bağlantı limiti; `0` kapatır |
+| `USER_DAILY_LIMIT` | `200` | Kullanıcı başına günlük genel bağlantı limiti; `0` kapatır |
 | `STATS_OWNER_ID` | `1065352859195015260` | `!stats` / `!panel` ve başka kullanıcının `!info` sorgusunu kullanabilecek tek Discord kullanıcı ID'si |
 | `MAINTENANCE_MODE` | *(boş)* | `1` ise bot açılışta bakım modunda başlar; boşsa son durum `data/maintenance.json` dosyasından okunur |
 | `MAINTENANCE_MESSAGE` | *(varsayılan metin)* | Bakım açıkken kullanıcılara gösterilecek özel mesaj |
@@ -152,9 +156,10 @@ docker compose -f cobalt.compose.yaml up -d
 
 ## Sunucu ayarları (`/ayar`, `!ayar`)
 
-- Yöneticiler (`Sunucuyu yönet` veya bot sahibi) `!ayar thread ac|kapat` ve `!ayar youtube sor|mp3|360|720|1080` ile sunucu bazlı tercihleri ayarlar; `!ayar` mevcut ayarları gösterir. Slash komutu `/ayar otomatik_thread:` ve `/ayar youtube:` aynı işi yapar.
+- Yöneticiler (`Sunucuyu yönet` veya bot sahibi) `!ayar thread ac|kapat`, `!ayar youtube sor|mp3|360|720|1080` ve `!ayar dil tr|en|auto` ile sunucu bazlı tercihleri ayarlar; `!ayar` mevcut ayarları gösterir. Slash komutu `/ayar otomatik_thread:`, `/ayar youtube:` ve `/ayar dil:` aynı işi yapar.
 - Otomatik thread açıksa, bağlantılı bir mesajın altında bir thread açılır ve sonraki yanıtlar oraya yönlendirilir.
 - YouTube kalitesi `sor` dışında bir değer seçildiğinde düğme penceresi atlanır ve varsayılan kalite doğrudan indirilir. `sor` durumunda kullanıcıya MP3/360/720/1080 düğmeleri gösterilir.
+- Dil ayarı `tr`/`en`/`auto` olabilir. Sunucu ayarı yoksa veya `auto` seçilirse varsayılan Türkçe kullanılır; Türkçe ve İngilizce durum, hata, kota ve ayar metinleri hazırdır.
 
 ## +18 koruması ve SQLite
 

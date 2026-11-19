@@ -11,6 +11,7 @@ from pathlib import Path
 import discord
 
 from .bot_runtime import _upload_too_large
+from .cancel_view import CancelView
 from .guild_settings import SETTINGS
 from .links import PostLink
 from .maintenance import MAINTENANCE
@@ -93,33 +94,73 @@ class OrchestrationMixin:
         if MAINTENANCE.active and message.author.id != owner_id:
             await self._reply(message, MAINTENANCE.message)
             return
+        locale = B.i18n.locale_for_message(message)
         auto_thread = getattr(self, "_auto_thread_message", None)
         if auto_thread:
             message = await auto_thread(message, links)
-        queue_notice: discord.Message | None = None
+        status_notice: discord.Message | None = None
+        cancel_view = None
+        cancelled = False
 
         async def on_wait() -> None:
-            nonlocal queue_notice
+            nonlocal status_notice
+            text = B.i18n.t("queued", locale)
             try:
-                queue_notice = await self._reply(message, "⏳ Sıradasın; bağlantın işlenecek.")
-            except discord.HTTPException:
+                if status_notice is None:
+                    status_notice = await self._reply(message, text)
+                else:
+                    await status_notice.edit(content=text)
+            except (discord.HTTPException, AttributeError, TypeError):
                 pass
 
         try:
             async with self.job_slots.slot(message.author.id, on_wait):
-                if queue_notice:
+                if status_notice is None:
                     try:
-                        await queue_notice.edit(content="⏳ Bağlantın hazırlanıyor.")
+                        status_notice = await self._reply(message, B.i18n.t("preparing", locale))
                     except discord.HTTPException:
+                        status_notice = None
+                elif getattr(status_notice, "edit", None) is not None:
+                    try:
+                        await status_notice.edit(content=B.i18n.t("preparing", locale))
+                    except (discord.HTTPException, AttributeError, TypeError):
                         pass
+                cancel_view = await OrchestrationMixin._attach_cancel_view(
+                    self, status_notice, message, locale
+                )
 
                 async def process_link(link: PostLink, status_message: discord.Message | None) -> None:
+                    nonlocal cancelled
                     outcome = "failure"
                     detail = ""
                     files: list[Path] = []
                     pending_target = None
                     precomputed_bytes: int | None = None
                     started = time.monotonic()
+                    quota = getattr(self, "user_quota", None)
+                    if quota is not None and message.author.id != owner_id:
+                        try:
+                            decision = await quota.aclaim(message.author.id)
+                        except Exception:
+                            LOG.exception("User quota check failed")
+                        else:
+                            if not decision.allowed:
+                                await self._reply(
+                                    message, B.i18n.quota_message(decision, locale)
+                                )
+                                REQUESTS.record(
+                                    guild_id=getattr(message.guild, "id", None),
+                                    guild_name=getattr(message.guild, "name", None),
+                                    channel_id=getattr(message.channel, "id", None),
+                                    user_id=getattr(message.author, "id", None),
+                                    user_name=str(getattr(message.author, "name", message.author)),
+                                    platform=link.platform,
+                                    url=link.url,
+                                    outcome="skipped",
+                                    detail="quota",
+                                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                                )
+                                return
                     try:
                         result = await self._handle_link(message, link, status_message=status_message)
                         if isinstance(result, tuple):
@@ -138,35 +179,29 @@ class OrchestrationMixin:
                             outcome = "success"
                         else:
                             outcome = "success"
+                    except asyncio.CancelledError:
+                        outcome = "skipped"
+                        detail = "cancelled"
+                        cancelled = True
+                        raise
                     except discord.Forbidden:
                         LOG.warning("Kanal için mesaj veya dosya gönderme izni yok: %s", message.channel.id)
                         outcome = "failure"
                         detail = "forbidden"
-                        REQUESTS.record(
-                            guild_id=getattr(message.guild, "id", None),
-                            guild_name=getattr(message.guild, "name", None),
-                            channel_id=getattr(message.channel, "id", None),
-                            user_id=getattr(message.author, "id", None),
-                            user_name=str(getattr(message.author, "name", message.author)),
-                            platform=link.platform,
-                            url=link.url,
-                            outcome=outcome,
-                            detail=detail,
-                            elapsed_ms=int((time.monotonic() - started) * 1000),
-                        )
+                        await self._reply(message, B.i18n.t("error_forbidden", locale))
                         return
                     except discord.HTTPException as exc:
                         LOG.warning("Discord upload error: %s", exc)
                         text = str(exc).lower()
                         if exc.status == 413 or "entity too large" in text or "larger than" in text or "40005" in text:
-                            await self._reply(message, "Dosya Discord yükleme sınırını aşıyor (sunucu/kanal limiti nedeniyle gönderilemedi).")
+                            await self._reply(message, B.i18n.t("discord_413", locale))
                         else:
-                            await self._reply(message, "Dosya Discord'a yüklenemedi. Kanal izinlerini ve yükleme sınırını kontrol edin.")
+                            await self._reply(message, B.i18n.t("discord_upload_failed", locale))
                         outcome = "failure"
                         detail = f"http:{exc.status}"
                     except Exception:
                         LOG.exception("Unexpected error processing %s", link.platform)
-                        await self._reply(message, "Bu bağlantı işlenirken beklenmeyen bir hata oluştu.")
+                        await self._reply(message, B.i18n.t("unexpected_error", locale))
                         outcome = "failure"
                         detail = "exception"
                     finally:
@@ -191,26 +226,28 @@ class OrchestrationMixin:
                         )
                         if pending_target is not None and record_id:
                             pending_target.request_id = record_id
-                    if outcome == "failure" and detail != "forbidden":
+                    if outcome == "failure" and detail not in {"forbidden", "cancelled"}:
                         try:
                             await self._reply(
                                 message,
-                                "↩️ İşlem başarısız oldu. Tekrar denemek için:",
+                                B.i18n.t("retry_hint", locale),
                                 view=RetryView(bot=self, source_message=message, link=link),
                             )
                         except discord.HTTPException:
                             pass
 
                 if len(links) == 1:
-                    await process_link(links[0], queue_notice)
+                    await process_link(links[0], status_notice)
                 else:
                     # Multiple links used to run one after another. Download two
                     # at a time and let each upload as soon as it is ready; keep
                     # the shared status message static to avoid edit races.
-                    if queue_notice:
+                    if getattr(status_notice, "edit", None) is not None:
                         try:
-                            await queue_notice.edit(content=f"⏳ {len(links)} bağlantı paralel işleniyor...")
-                        except discord.HTTPException:
+                            await status_notice.edit(content=B.i18n.t(
+                                "parallel_processing", locale, count=len(links)
+                            ))
+                        except (discord.HTTPException, AttributeError, TypeError):
                             pass
                     link_slots = asyncio.Semaphore(2)
 
@@ -220,11 +257,13 @@ class OrchestrationMixin:
 
                     await asyncio.gather(*(run_link(link) for link in links))
         finally:
-            if queue_notice:
-                try:
-                    await queue_notice.delete()
-                except discord.HTTPException:
-                    pass
+            if status_notice is not None and not (cancelled or (cancel_view and cancel_view.cancelled)):
+                delete = getattr(status_notice, "delete", None)
+                if delete is not None:
+                    try:
+                        await delete()
+                    except (discord.HTTPException, AttributeError, TypeError):
+                        pass
 
     async def _reply(self, message: discord.Message, content: str = "", files: list[Path] | None = None,
                      *, embed: discord.Embed | None = None, view: discord.ui.View | None = None,
@@ -271,3 +310,23 @@ class OrchestrationMixin:
                                            mention_author=False, suppress_embeds=embed is None)
             return await send(content=content_out, files=attachments, embed=embed, view=view,
                               suppress_embeds=embed is None)
+
+    async def _attach_cancel_view(self, status_message, message, locale: str = "tr"):
+        """Attach a cancel button that stops this message's processing task."""
+        if status_message is None:
+            return None
+        edit = getattr(status_message, "edit", None)
+        task = asyncio.current_task()
+        if edit is None or task is None:
+            return None
+        view = CancelView(
+            task=task,
+            owner_id=getattr(getattr(message, "author", None), "id", None),
+            bot_owner_id=getattr(self, "owner_id", None),
+            locale=locale,
+        )
+        try:
+            await edit(view=view)
+        except (discord.HTTPException, AttributeError, TypeError):
+            return None
+        return view
