@@ -21,6 +21,7 @@ from .direct_providers import (
     download_direct,
     download_vxtwitter,
 )
+from .disk import LowDiskError, ensure_free_disk
 from .gendownload import download_gendownload
 from .highlight_state import HIGHLIGHTS, format_wait, highlight_id
 from .indownio import download_indownio, is_rate_limited_message
@@ -278,6 +279,10 @@ async def download_media(link: PostLink, folder: Path, max_bytes: int, cookie_fi
     Each provider gets its own directory so a partial failure cannot be
     mistaken for a successful extraction. The caller owns the temp folder.
     """
+    try:
+        ensure_free_disk(folder)
+    except LowDiskError as exc:
+        raise DownloadError(str(exc)) from exc
     original_link = link
     canonical = await canonical_facebook_post(link) if link.platform == "facebook" else None
     if canonical:

@@ -11,7 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from media_bot.backup import backup_databases, database_paths, prune_backups
+from media_bot.backup import backup_databases, database_paths, latest_backup, prune_backups
 from media_bot.bot import MediaBot
 from media_bot.circuit_breaker import CircuitBreaker
 from media_bot.cookiefile import cookie_report, cookie_warning
@@ -38,9 +38,12 @@ class BackupTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_backup_copies_rows_into_timestamped_folder(self):
-        folder = backup_databases([self.source], self.root / "backups", now=1_700_000_000)
+        root = self.root / "backups"
+        self.assertIsNone(latest_backup(root))
+        folder = backup_databases([self.source], root, now=1_700_000_000)
         self.assertIsNotNone(folder)
         self.assertEqual(folder.parent.name, "backups")
+        self.assertEqual(latest_backup(root), folder)
         with closing(sqlite3.connect(folder / "bot.sqlite3")) as db:
             self.assertEqual(db.execute("SELECT value FROM t").fetchone()[0], "kept")
 
@@ -161,6 +164,11 @@ class BotHealthPayloadTests(unittest.IsolatedAsyncioTestCase):
         payload = self.bot.health_payload()
         self.assertEqual(payload["status"], "starting")
         self.assertEqual(payload["concurrency"], 2)
+        self.assertEqual(payload["queue"], {"active": 0, "waiting": 0, "capacity": 2})
+        self.assertIn("free_mb", payload["disk"])
+        self.assertIn("min_free_mb", payload["disk"])
+        self.assertIsNone(payload["backup"]["last"])
+        self.assertIsNone(payload["backup"]["age_hours"])
         self.assertTrue(payload["cobalt"])
         self.assertIn("open", payload["providers"])
         self.assertEqual(payload["cookies"]["total"], 0)

@@ -12,7 +12,7 @@ from pathlib import Path
 import discord
 
 from .adult import AdultQuota, reddit_adult_status  # noqa: F401
-from .backup import backup_databases, database_paths
+from .backup import backup_databases, database_paths, latest_backup
 from .bluesky import download_bluesky_media, fetch_bluesky_post  # noqa: F401
 from .captions import _clean, display_chunks, fetch_caption  # noqa: F401
 from .card_cache import CARD_CACHE
@@ -20,6 +20,7 @@ from .circuit_breaker import BREAKERS
 from .cookiefile import cookie_report, cookie_warning
 from .cooldowns import Cooldowns
 from .direct_providers import x_media_urls  # noqa: F401
+from .disk import disk_status, free_mb, min_free_mb
 from .download import DownloadError, download_media  # noqa: F401
 from . import i18n
 from .health import start_health_server
@@ -119,6 +120,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         self._backup_task: asyncio.Task | None = None
         self._health_server = None
         self._cookie_checked = False
+        self._disk_warned_at = 0.0
         try:
             cooldown = float(os.getenv("COMMAND_COOLDOWN_SECONDS", "2") or 2)
         except ValueError:
@@ -155,9 +157,17 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
     def _register_commands(self) -> None:
         register_commands(self)
     async def close(self) -> None:
-        for task in (self._health_task, self._backup_task):
-            if task and not task.done():
-                task.cancel()
+        tasks = [
+            task for task in (self._health_task, self._backup_task, *tuple(self._background_tasks))
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._health_task = None
+        self._backup_task = None
+        self._background_tasks.clear()
         if self._health_server is not None:
             try:
                 self._health_server.shutdown()
@@ -184,6 +194,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         if not self._cookie_checked:
             self._cookie_checked = True
             await self._warn_cookie_expiry()
+        await self._warn_disk_space()
         if (HIGHLIGHTS.enabled and HIGHLIGHTS.health_check_enabled
                 and (self._health_task is None or self._health_task.done())):
             self._health_task = asyncio.create_task(self._highlight_health_loop())
@@ -198,6 +209,15 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
             ready = False
         cache = MEDIA_CACHE.stats()
         cards = CARD_CACHE.stats()
+        slots = self.job_slots.snapshot()
+        backup = latest_backup(self.database_path.parent / "backups")
+        backup_info: dict[str, str | float | None] = {"last": None, "age_hours": None}
+        if backup is not None:
+            backup_info["last"] = backup.name
+            try:
+                backup_info["age_hours"] = round((time.time() - backup.stat().st_mtime) / 3600, 1)
+            except OSError:
+                pass
         return {
             "status": "ok" if ready else "starting",
             "uptime_seconds": int(time.time() - self.started_at),
@@ -205,6 +225,13 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
             "guilds": len(self.guilds),
             "latency_ms": int(self.latency * 1000) if self.latency and self.latency == self.latency else 0,
             "concurrency": self.concurrency,
+            "queue": {
+                "active": slots["active"],
+                "waiting": slots["waiting"],
+                "capacity": self.concurrency,
+            },
+            "disk": disk_status(self.database_path.parent),
+            "backup": backup_info,
             "providers": breakers,
             "cobalt": bool(self.cobalt_url),
             "maintenance": MAINTENANCE.active,
@@ -253,7 +280,28 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                 raise
             except Exception:
                 LOG.exception("Veritabanı yedeği alınamadı")
+            await self._warn_disk_space()
             await asyncio.sleep(interval_hours * 3600)
+
+    async def _warn_disk_space(self) -> None:
+        now = time.time()
+        if now - self._disk_warned_at < 12 * 3600:
+            return
+        minimum = min_free_mb()
+        available = free_mb(self.database_path.parent)
+        if available is None or minimum <= 0 or available >= minimum:
+            return
+        self._disk_warned_at = now
+        warning = (
+            f"Boş disk alanı az: {available} MB kaldı (eşik {minimum} MB). "
+            "Yeni indirmeler reddedilecek."
+        )
+        LOG.warning(warning)
+        try:
+            owner = await self.fetch_user(self.owner_id)
+            await owner.send(f"⚠️ {warning}")
+        except (discord.HTTPException, AttributeError):
+            LOG.warning("Disk uyarısı sahibine gönderilemedi")
 
     async def _highlight_health_loop(self) -> None:
         # Periodic health check: natgeo highlight 18023864549864045 (expects ~8 videos).

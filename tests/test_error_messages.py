@@ -11,6 +11,7 @@ class ErrorMessageTests(unittest.TestCase):
             "HTTP 429 too many requests": "error_rate_limit",
             "operation timed out": "error_timeout",
             "file is too large": "error_too_large",
+            "no space left on device": "error_disk_space",
             "post not found": "error_not_found",
             "unsupported link": "error_unsupported",
             "something odd": "error_generic",

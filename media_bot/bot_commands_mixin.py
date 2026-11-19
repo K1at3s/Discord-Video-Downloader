@@ -10,6 +10,7 @@ import discord
 from . import i18n
 from .card_cache import CARD_CACHE
 from .circuit_breaker import BREAKERS
+from .disk import disk_status
 from .guild_settings import SETTINGS
 from .highlight_state import HIGHLIGHTS, format_wait
 from .maintenance import MAINTENANCE
@@ -67,6 +68,29 @@ class AdminCommandsMixin:
                     f"Kota (bu saat/gün): {summary['hourly']}/"
                     f"{summary['hourly_limit'] or '∞'} saatlik · {summary['daily']}/"
                     f"{summary['daily_limit'] or '∞'} günlük · {summary['users']} kullanıcı"
+                )
+        slots = getattr(self, "job_slots", None)
+        if slots is not None:
+            try:
+                queue = slots.snapshot()
+            except Exception:
+                queue = None
+            if queue is not None:
+                capacity = getattr(self, "concurrency", 0)
+                parts.append("")
+                parts.append(
+                    f"İş kuyruğu: {queue['active']}/{capacity} çalışıyor · "
+                    f"{queue['waiting']} bekliyor"
+                )
+        database_path = getattr(self, "database_path", None)
+        if database_path is not None:
+            disk = disk_status(database_path.parent)
+            if disk["free_mb"] is not None:
+                flag = " · DÜŞÜK" if disk["low"] else ""
+                parts.append("")
+                parts.append(
+                    f"Disk: {disk['free_mb']} MB boş "
+                    f"(eşik {disk['min_free_mb']} MB){flag}"
                 )
         text = "\n".join(parts).strip()
         await self._reply(message, text[:1900])

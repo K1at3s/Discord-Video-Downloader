@@ -15,6 +15,7 @@ _TIMEOUT_HINTS = ("timeout", "timed out", "zaman aşımı", "zaman asimi")
 _NO_MEDIA_HINTS = ("no usable media", "no uploadable media", "no media")
 _NOT_FOUND_HINTS = ("not found", "404", "unavailable", "removed", "deleted")
 _LARGE_HINTS = ("too large", "413", "entity too large", "size limit", "oversize", "exceeds")
+_DISK_HINTS = ("disk", "no space", "not enough space", "boş alan", "yer yok")
 _UNSUPPORTED_HINTS = ("unsupported", "not supported", "unknown platform")
 
 
@@ -32,6 +33,8 @@ def classify(detail: str | None) -> str:
         return "error_timeout"
     if any(hint in text for hint in _LARGE_HINTS):
         return "error_too_large"
+    if any(hint in text for hint in _DISK_HINTS):
+        return "error_disk_space"
     if any(hint in text for hint in _NOT_FOUND_HINTS):
         return "error_not_found"
     if any(hint in text for hint in _UNSUPPORTED_HINTS):

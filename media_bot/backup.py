@@ -54,6 +54,18 @@ def backup_databases(paths: Sequence[Path], root: Path, keep: int = 7,
     return folder
 
 
+def latest_backup(root: Path) -> Path | None:
+    """Return the newest timestamped backup folder, if any."""
+    root = Path(root)
+    if not root.is_dir():
+        return None
+    folders = [
+        child for child in root.iterdir()
+        if child.is_dir() and len(child.name) == 15 and child.name[8] == "-"
+    ]
+    return max(folders, key=lambda item: item.name, default=None)
+
+
 def prune_backups(root: Path, keep: int = 7) -> list[Path]:
     """Delete the oldest timestamped backup folders, keeping ``keep`` of them."""
     root = Path(root)

@@ -130,6 +130,19 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **`/metrics` zenginleştirmesi** — kart önbelleği kayıt/dosya/boyut/isabet oranı
   ve bu saat/gün toplam kota doluluğu özete eklendi (`UserQuota.summary()`).
 
+## Operasyon görünürlüğü — 19 Kasım 2026
+
+- [x] **Kurulum doktoru** — `scripts/doctor.ps1`; Python sürümü, temel paketler,
+  `ffmpeg`/`ffprobe`, `.env`/token, `data/` yazma izni, disk alanı, çerez süresi,
+  Cobalt ve açıksa `/healthz` durumunu denetler; kritik sorunda `1` ile çıkar.
+- [x] **Zengin `/healthz`** — iş kuyruğu (çalışan/bekleyen/kapasite), boş disk ve
+  eşik, son yedek yaşı; `JobSlots.snapshot()` ile canlı sayaçlar.
+- [x] **Disk koruması** — `media_bot/disk.py`; `MIN_FREE_DISK_MB` (varsayılan 512)
+  altında yeni indirmeler yerelleştirilmiş hata ile reddedilir, sahibe 12 saatte bir
+  DM gider. `/metrics` boş disk ve kuyruk satırlarını gösterir.
+- [x] **Temiz kapanış** — `close()` sağlık/yedek döngülerini ve arka plan
+  görevlerini iptal edip bekler; yarım kalan görevler sessizce bırakılmaz.
+
 ## Sıradaki paketler
 
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).

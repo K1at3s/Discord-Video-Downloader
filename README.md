@@ -56,6 +56,8 @@ Copy-Item .env.example .env
 
 Botu `Ctrl+C` ile durdurabilirsiniz. Linux/macOS'ta sanal ortamı etkinleştirip `python -m media_bot.bot` çalıştırın. Botun çevrimiçi kalması için çalıştığı makine açık kalmalıdır. Windows'ta indirme/ffmpeg gecikmesini azaltmak için yönetici PowerShell'de `.\scripts\defender-exclusions.ps1` çalıştırabilirsiniz (proje, `data`, `.venv`, `vendor` ve python/ffmpeg süreçleri için Defender istisnası ekler).
 
+**Kurulum kontrolü:** `.\scripts\doctor.ps1` Python sürümünü, temel paketleri, `ffmpeg`/`ffprobe` yolunu, `.env` ve token'ı, `data/` yazma iznini, boş disk alanını, çerez sürelerini, Cobalt erişimini ve açıksa `/healthz` yanıtını tek komutla denetler. Kritik sorun varsa çıkış kodu `1` olur.
+
 ## 7/24 çalıştırma ve izleme
 
 Botu oturum açıldığında otomatik başlatmak ve çökünce yeniden denemek için:
@@ -70,7 +72,7 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 
 **Günlük dosyası:** `data/bot.log` varsayılan olarak 10 MB'ta döner ve 7 eski dosya tutar (`LOG_FILE`, `LOG_LEVEL`).
 
-**Sağlık uç noktası:** `HEALTH_PORT` sıfırdan büyükse `http://127.0.0.1:<port>/healthz` JSON döner: durum, uptime, sunucu sayısı, gecikme, açık devre kesiciler, Cobalt yapılandırması, bakım modu ve çerez sayıları. Varsayılan kapalıdır; dışarıya açmadan önce güvenlik duvarını ve ters vekili düşünün.
+**Sağlık uç noktası:** `HEALTH_PORT` sıfırdan büyükse `http://127.0.0.1:<port>/healthz` JSON döner: durum, uptime, sunucu sayısı, gecikme, iş kuyruğu (çalışan/bekleyen/kapasite), boş disk ve eşik, son yedek yaşı, açık devre kesiciler, Cobalt yapılandırması, bakım modu ve çerez sayıları. Varsayılan kapalıdır; dışarıya açmadan önce güvenlik duvarını ve ters vekili düşünün.
 
 **Yedekler:** Bot her `BACKUP_INTERVAL_HOURS` saatte (varsayılan 24) `bot.sqlite3`, `provider_metrics.sqlite3` ve `request_log.sqlite3` dosyalarını `data/backups/<tarih>/` altına `sqlite3.Connection.backup` ile kopyalar; `BACKUP_KEEP` kadar klasör saklar. Geri yüklemek için botu durdurup ilgili dosyayı `data/` altına kopyalayın.
 
@@ -88,6 +90,7 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 | `YTDLP_REMOTE_EJS` | `0` | `1` olursa YouTube `yt-dlp` yedeği gerektiğinde GitHub’dan EJS betiği indirebilir; varsayılan kapalıdır |
 | `MAX_LINKS_PER_MESSAGE` | `3` | Tek mesajda işlenen bağlantı sayısı; en fazla 10 |
 | `MAX_CONCURRENT_JOBS` | `2` | Mesaj ve YouTube düğmesi işleri için toplam eşzamanlı sınır; en fazla 10 |
+| `MIN_FREE_DISK_MB` | `512` | İndirme öncesi minimum boş disk alanı (MB); altına düşünce yeni indirmeler reddedilir ve sahibe DM gider. `0` kontrolü kapatır |
 | `PROVIDER_HEDGE_SECONDS` | Boş | Son başarılı sağlayıcı tek başına denenir; boşsa ölçülen p95'e göre 3–20 sn arasında uyarlanır. Sabit değer yazılırsa o kullanılır; `0` = beklemeden yarış (YouTube MP3 varsayılanı `5`) |
 | `DATABASE_PATH` | `data/bot.sqlite3` | +18 kotası ve highlight quota/cache durumu için SQLite dosyası |
 | `COBALT_API_URL` | Boş | İsteğe bağlı Cobalt adresi, örn. `http://127.0.0.1:9000/` |
@@ -201,7 +204,7 @@ Bot çalışırken her sağlayıcı denemesinin sonucu ve süresi `data/provider
 
 `DATABASE_PATH` farklı bir klasörü gösteriyorsa raporda `--db <o klasör>\provider_metrics.sqlite3` kullanın. `--hours 48` veya `--hours 168` gibi bir aralık seçilebilir. Rapor platform ve sağlayıcı başına deneme sayısını, kazanan sağlayıcıyı, `quota`/`skipped`/arıza ayrımını ve başarılı denemelerin p50/p95 sürelerini gösterir (`quota` = gerçek kota aşımı; `skipped` = cooldown/reserve vb. atlanan denemeler). 14 günden eski ölçümler bot açılışında ve çalışırken günde bir kez temizlenir. Rapor ağ isteği yapmaz.
 
-Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat ve 7 gün özetini (varsa highlight bucket durumu, kart önbelleği ve bu saat/gün kota doluluğu dahil) görebilirsiniz. Kota satırı yalnızca toplam kullanımı gösterir; kullanıcı bazlı bilgi içermez.
+Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat ve 7 gün özetini (varsa highlight bucket durumu, kart önbelleği, iş kuyruğu, boş disk ve bu saat/gün kota doluluğu dahil) görebilirsiniz. Kota satırı yalnızca toplam kullanımı gösterir; kullanıcı bazlı bilgi içermez.
 
 ### İşlem kayıtları (sunucu/kullanıcı/link)
 
@@ -213,7 +216,7 @@ Discord komutları (izin verilen kanalda):
   - Aralık: `!stats 24s`, `!stats 7g`, `!stats 30g` (en fazla 30 gün; `s` = saat, `g` = gün).
   - Platform detayı: `!stats instagram`, `!stats 7g instagram` veya `!platform instagram 30g` → o platformun toplam/başarı oranı, dosya-boyut, ortalama süre, kullanıcı/sunucu sayısı ve en çok kullananlar.
 - `!info` / `!profil` / `!me` → kendi işlem özetiniz (`!info 7g` ile aralık). `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
-- `!metrics` / `!durum` → sağlayıcı, highlight bucket, kart önbelleği ve toplam kota özeti.
+- `!metrics` / `!durum` → sağlayıcı, highlight bucket, kart önbelleği, iş kuyruğu, disk ve toplam kota özeti.
 - `!bakim` → bakım modu durumu; `!bakim ac` / `!bakim kapat` ile aç/kapat. **Yalnızca `STATS_OWNER_ID`**. Bakım açıkken sahip dışındaki kullanıcıların yeni indirmeleri engellenir (panelde “Bakım: Açık” görünür).
 - `!logtemizle` → tüm işlem kayıtlarını silme onayı; `!logtemizle onay` ile siler. **Yalnızca `STATS_OWNER_ID`**.
 - `!logsil` → kendi kayıtlarını silme onayı; `!logsil onay` ile siler. `!logsil @kullanıcı` / `!logsil <id>` başka kullanıcının kayıtlarını siler (**yalnızca sahip**).

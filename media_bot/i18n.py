@@ -238,6 +238,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "tr": "📦 Medya Discord yükleme sınırını aşıyor.",
         "en": "📦 The media exceeds the Discord upload limit.",
     },
+    "error_disk_space": {
+        "tr": "💾 Sunucuda yeterli boş disk alanı yok. Yönetici disk temizliği yapmalı.",
+        "en": "💾 The server is low on free disk space. An administrator should clean up the disk.",
+    },
     "error_not_found": {
         "tr": "🔍 Gönderi bulunamadı, kaldırılmış veya erişime kapalı.",
         "en": "🔍 The post was not found, removed, or is unavailable.",
