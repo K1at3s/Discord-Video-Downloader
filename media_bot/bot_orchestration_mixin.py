@@ -10,6 +10,7 @@ from pathlib import Path
 
 import discord
 
+from . import i18n
 from .bot_runtime import _upload_too_large
 from .cancel_view import CancelView
 from .guild_settings import SETTINGS
@@ -37,8 +38,7 @@ class OrchestrationMixin:
                 and not cooldowns.allow(message.author.id)):
             return
         if command in {"!yardim", "!yardım", "!help", "!komutlar"}:
-            help_text = __import__("media_bot.bot", fromlist=[""]).HELP_TEXT
-            await self._reply(message, help_text)
+            await self._reply(message, i18n.help_text(i18n.locale_for_message(message)))
             return
         if content in {"!metrics", "!botmetrics", "!durum", "!botdurum"}:
             await self._reply_metrics(message)

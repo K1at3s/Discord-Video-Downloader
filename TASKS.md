@@ -116,6 +116,20 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
   hata sınıflandırma, ilerleme biçimlendirme ve dil ayarları için testler eklendi;
   `ruff check` ve tüm test paketi CI'de çalışmaya devam eder.
 
+## Hızlı kazanımlar — 19 Kasım 2026
+
+- [x] **Yerelleştirilmiş yardım** — `!yardim` / `!help` artık sunucunun dil ayarına
+  göre `i18n.help_text()` kullanıyor; sabit `HELP_TEXT` kaldırıldı.
+- [x] **Güvenlik CI'ı** — `.github/workflows/ci.yml` içinde ayrı `security` işi
+  `pip-audit -r requirements.txt` çalıştırıyor. `Pillow>=13,<14` güncellendi,
+  kullanılmayan `discord.py[voice]`/PyNaCl bağımlılığı kaldırıldı.
+- [x] **Dependabot** — `.github/dependabot.yml` pip ve GitHub Actions güncellemelerini
+  haftalık, gruplanmış PR'larla takip ediyor.
+- [x] **Pre-commit** — `.pre-commit-config.yaml`; YAML/TOML doğrulaması, büyük dosya
+  kontrolü, boşluk düzeltmesi ve `ruff --fix`.
+- [x] **`/metrics` zenginleştirmesi** — kart önbelleği kayıt/dosya/boyut/isabet oranı
+  ve bu saat/gün toplam kota doluluğu özete eklendi (`UserQuota.summary()`).
+
 ## Sıradaki paketler
 
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).

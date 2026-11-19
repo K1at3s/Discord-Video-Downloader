@@ -115,6 +115,23 @@ class UserQuota:
     async def aclaim(self, user_id: int, now: float | None = None) -> QuotaDecision:
         return await asyncio.to_thread(self.claim, user_id, now)
 
+    def summary(self, now: float | None = None) -> dict[str, int]:
+        """Aggregate current-window usage across all tracked users."""
+        now = time.time() if now is None else float(now)
+        hour_key = _hour_key(now)
+        day_key = _day_key(now)
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT hour_start, hour_count, day_start, day_count FROM user_quota"
+            ).fetchall()
+        return {
+            "users": len(rows),
+            "hourly": sum(int(row[1]) for row in rows if int(row[0]) == hour_key),
+            "daily": sum(int(row[3]) for row in rows if int(row[2]) == day_key),
+            "hourly_limit": self.hourly_limit,
+            "daily_limit": self.daily_limit,
+        }
+
     def usage(self, user_id: int, now: float | None = None) -> dict[str, int]:
         """Return current window usage for panels/tests without consuming a token."""
         now = time.time() if now is None else float(now)

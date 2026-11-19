@@ -80,21 +80,6 @@ def _is_admin(message: discord.Message) -> bool:
     return bool(getattr(permissions, "administrator", False) or getattr(permissions, "manage_guild", False))
 
 
-HELP_TEXT = """**Discord Video Bot**
-Bağlantı gönder: Instagram, Threads, TikTok, X, Facebook, Reddit, YouTube, Spotify, Bluesky, Douyin, Weibo, Streamable.
-
-**Komutlar**
-`/stats [24s|7g|30g] [platform]` · işlem paneli (sahip)
-`/info [kullanıcı]` · kişisel özet
-`/cache` · önbellek durumu
-`/hatalar [aralık]` · son hatalar (sahip)
-`/bakim [ac|kapat]` · bakım modu (sahip)
-`/ayar` · otomatik thread, YouTube kalitesi ve dil (yönetici)
-`/metrics` · sağlayıcı metrikleri
-
-Eski `!` komutları da çalışır (`!ayar`, `!ayar thread ac`)."""
-
-
 def _extract_download_caption(folder: Path) -> str | None:
     for info_file in folder.rglob("*.info.json"):
         try:

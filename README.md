@@ -201,25 +201,25 @@ Bot çalışırken her sağlayıcı denemesinin sonucu ve süresi `data/provider
 
 `DATABASE_PATH` farklı bir klasörü gösteriyorsa raporda `--db <o klasör>\provider_metrics.sqlite3` kullanın. `--hours 48` veya `--hours 168` gibi bir aralık seçilebilir. Rapor platform ve sağlayıcı başına deneme sayısını, kazanan sağlayıcıyı, `quota`/`skipped`/arıza ayrımını ve başarılı denemelerin p50/p95 sürelerini gösterir (`quota` = gerçek kota aşımı; `skipped` = cooldown/reserve vb. atlanan denemeler). 14 günden eski ölçümler bot açılışında ve çalışırken günde bir kez temizlenir. Rapor ağ isteği yapmaz.
 
-Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat ve 7 gün özetini (varsa highlight bucket durumu dahil) görebilirsiniz.
+Discord içinden izin verilen kanalda `!metrics` / `!durum` yazarak son 24 saat ve 7 gün özetini (varsa highlight bucket durumu, kart önbelleği ve bu saat/gün kota doluluğu dahil) görebilirsiniz. Kota satırı yalnızca toplam kullanımı gösterir; kullanıcı bazlı bilgi içermez.
 
 ### İşlem kayıtları (sunucu/kullanıcı/link)
 
 Bot, işlenen her bağlantı için `data/request_log.sqlite3` dosyasına kayıt tutar: zaman, sunucu, kanal, kullanıcı, platform, URL, sonuç (`success`/`failure`/`pending`), işlem süresi, dosya sayısı ve toplam boyut. Bu dosya **URL ve kullanıcı/sunucu bilgisi içerir** (sağlayıcı metrik dosyasından farklıdır). Saklama süresi `REQUEST_LOG_RETENTION_DAYS` (varsayılan 30 gün); `REQUEST_LOG_STORE_URL=0` ile URL'ler hiç kaydedilmez.
 
 Discord komutları (izin verilen kanalda):
-- `!yardim` / `!help` → komut listesi ve desteklenen platformlar.
+- `!yardim` / `!help` → komut listesi ve desteklenen platformlar; sunucunun dil ayarına (`tr`/`en`/`auto`) göre yerelleştirilir.
 - `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
   - Aralık: `!stats 24s`, `!stats 7g`, `!stats 30g` (en fazla 30 gün; `s` = saat, `g` = gün).
   - Platform detayı: `!stats instagram`, `!stats 7g instagram` veya `!platform instagram 30g` → o platformun toplam/başarı oranı, dosya-boyut, ortalama süre, kullanıcı/sunucu sayısı ve en çok kullananlar.
 - `!info` / `!profil` / `!me` → kendi işlem özetiniz (`!info 7g` ile aralık). `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
-- `!metrics` / `!durum` → sağlayıcı ve highlight bucket özeti.
+- `!metrics` / `!durum` → sağlayıcı, highlight bucket, kart önbelleği ve toplam kota özeti.
 - `!bakim` → bakım modu durumu; `!bakim ac` / `!bakim kapat` ile aç/kapat. **Yalnızca `STATS_OWNER_ID`**. Bakım açıkken sahip dışındaki kullanıcıların yeni indirmeleri engellenir (panelde “Bakım: Açık” görünür).
 - `!logtemizle` → tüm işlem kayıtlarını silme onayı; `!logtemizle onay` ile siler. **Yalnızca `STATS_OWNER_ID`**.
 - `!logsil` → kendi kayıtlarını silme onayı; `!logsil onay` ile siler. `!logsil @kullanıcı` / `!logsil <id>` başka kullanıcının kayıtlarını siler (**yalnızca sahip**).
 - `!hatalar` → son 24 saatteki başarısız işlemler (platform, kullanıcı, sunucu, kısa neden). `!hatalar 7g` ile aralık verilebilir. **Yalnızca `STATS_OWNER_ID`**.
-- `!cache` / `!önbellek` → genel medya ve highlight önbelleğinin kayıt/dosya/boyut ve TTL bilgisi.
-- `!cachetemizle` / `!önbellektemizle` → her iki önbelleği temizler. **Yalnızca `STATS_OWNER_ID`**.
+- `!cache` / `!önbellek` → genel medya, highlight ve X/Reddit kart önbelleğinin kayıt/dosya/boyut, isabet oranı ve TTL bilgisi.
+- `!cachetemizle` / `!önbellektemizle` → tüm önbellekleri (kart önbelleği dahil) temizler. **Yalnızca `STATS_OWNER_ID`**.
 - Başarısız bir indirmeden sonra bot, bağlantıyı paylaşan kişi (ve sahip) için **🔁 Tekrar dene** butonu gönderir; buton aynı bağlantıyı yeniden işler ve sonucu ayrı bir işlem kaydı olarak yazar.
 
 **Slash komutlar:** `/yardim`, `/stats`, `/info`, `/cache`, `/cachetemizle`, `/hatalar`, `/bakim`, `/metrics` aynı işlevleri buton/argüman desteğiyle sunar. Eşitleme açılışta otomatik yapılır; komutların anında görünmesi için `.env` içine `COMMAND_GUILD_ID=<sunucu_id>` yazın (boşsa global eşitlenir ve Discord'un önbelleği yüzünden bir süre gecikebilir). `!` komutları için kullanıcı başı `COMMAND_COOLDOWN_SECONDS` (varsayılan 2 sn) spam koruması uygulanır; sahip muaftır.
@@ -254,8 +254,21 @@ Her `push` / `pull_request` aşamasında [`.github/workflows/ci.yml`](.github/wo
 
 - `ruff check` — kod kalitesi ve kullanılmayan içe aktarma denetimi (`pyproject.toml` ile yapılandırılmış)
 - `python -m unittest discover -s tests -q` — tüm birim ve akış testleri
+- `pip-audit -r requirements.txt` — bilinen güvenlik açığı denetimi (ayrı `security` işi)
 
-İş akışı `windows-latest` ve `ubuntu-latest` üzerinde Python 3.12 ile çalışır.
+İş akışı testleri `windows-latest` ve `ubuntu-latest` üzerinde Python 3.12 ile çalıştırır. Dependabot [`.github/dependabot.yml`](.github/dependabot.yml) ile Python bağımlılıkları ve GitHub Actions sürümlerini haftalık olarak gruplanmış PR'larla günceller.
+
+### Yerel kontroller
+
+Commit öncesi aynı denetimleri elle çalıştırabilirsiniz:
+
+```powershell
+.\.venv\Scripts\ruff.exe check media_bot tests scripts
+$env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --progress-spinner off
+```
+
+[`pre-commit`](https://pre-commit.com/) isteğe bağlıdır; bir kez `pip install pre-commit` ve `pre-commit install` çalıştırdıktan sonra her commit'te YAML/TOML doğrulaması, büyük dosya kontrolü, boşluk düzeltmesi ve `ruff --fix` uygulanır.
 
 ### Benchmark
 

@@ -47,3 +47,15 @@ class UserQuotaTests(unittest.TestCase):
         self.assertEqual(usage["hourly"], 1)
         self.assertEqual(usage["hourly_limit"], 3)
         self.assertEqual(quota.usage(1, NOW + 3600)["hourly"], 0)
+
+    def test_summary_aggregates_current_windows(self):
+        quota = UserQuota(self.path, hourly_limit=3, daily_limit=5)
+        quota.claim(1, NOW)
+        quota.claim(2, NOW)
+        quota.claim(2, NOW)
+        summary = quota.summary(NOW)
+        self.assertEqual(summary["users"], 2)
+        self.assertEqual(summary["hourly"], 3)
+        self.assertEqual(summary["daily"], 3)
+        self.assertEqual(summary["hourly_limit"], 3)
+        self.assertEqual(quota.summary(NOW + 3600)["hourly"], 0)

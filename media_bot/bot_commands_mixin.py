@@ -46,6 +46,28 @@ class AdminCommandsMixin:
                 f"bekleme={format_wait(wait) if wait > 0 else '0 dk'} "
                 f"health={'açık' if HIGHLIGHTS.health_check_enabled else 'kapalı'}"
             )
+        cards = CARD_CACHE.stats()
+        if cards.get("enabled"):
+            lookups = cards.get("hits", 0) + cards.get("misses", 0)
+            rate = f"{(cards.get('hits', 0) / lookups) * 100:.0f}%" if lookups else "—"
+            parts.append("")
+            parts.append(
+                f"Kart önbelleği: {cards['entries']} kayıt · {cards['files']} dosya · "
+                f"{_human_bytes(cards['bytes'])} · isabet {rate}"
+            )
+        quota = getattr(self, "user_quota", None)
+        if quota is not None and quota.enabled:
+            try:
+                summary = quota.summary()
+            except Exception:
+                LOG.exception("Kota özeti okunamadı")
+            else:
+                parts.append("")
+                parts.append(
+                    f"Kota (bu saat/gün): {summary['hourly']}/"
+                    f"{summary['hourly_limit'] or '∞'} saatlik · {summary['daily']}/"
+                    f"{summary['daily_limit'] or '∞'} günlük · {summary['users']} kullanıcı"
+                )
         text = "\n".join(parts).strip()
         await self._reply(message, text[:1900])
 
