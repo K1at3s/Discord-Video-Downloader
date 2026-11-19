@@ -221,14 +221,15 @@ class AdminCommandsMixin:
         shown_locale = settings.locale if settings.locale in {"tr", "en"} else locale
         await self._reply(message, i18n.settings_message(settings, shown_locale, updated=bool(changes)))
 
-    async def _reply_log_clear(self, message: discord.Message, argument: str) -> None:
+    async def _reply_log_clear(self, message: discord.Message, argument: str = "") -> None:
         confirmed = "onay" in {token.lower() for token in argument.split()}
         if not confirmed:
             total = REQUESTS.count()
+            hint = "/logtemizle onay:True" if hasattr(message, "interaction") else "!logtemizle onay"
             await self._reply(
                 message,
                 f"⚠️ Tüm işlem kayıtları silinecek ({total} satır).\n"
-                "Onaylamak için `!logtemizle onay` yazın.",
+                f"Onaylamak için `{hint}` yazın.",
             )
             return
         removed = REQUESTS.clear()
@@ -255,7 +256,11 @@ class AdminCommandsMixin:
             return
         if not confirmed:
             count = REQUESTS.count(user_id=getattr(target, "id", 0))
-            hint = "!logsil @kullanıcı onay" if is_other else "!logsil onay"
+            slash = hasattr(message, "interaction")
+            prefix = "/logsil onay:True" if slash else "!logsil onay"
+            hint = f"{prefix} kullanıcı:<id>" if is_other and slash else (
+                "!logsil @kullanıcı onay" if is_other else prefix
+            )
             await self._reply(
                 message,
                 f"⚠️ {target_name} için {count} kayıt silinecek.\nOnaylamak için `{hint}` yazın.",

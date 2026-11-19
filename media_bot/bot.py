@@ -46,7 +46,7 @@ from .youtube import download_youtube  # noqa: F401
 from .youtube_view import YoutubeChoiceView, deliver_youtube, status_view  # noqa: F401
 
 from .bot_runtime import _bounded_int
-from .bot_slash_commands import register_commands
+from .bot_slash_commands import BotTranslator, register_commands
 from .bot_commands_mixin import AdminCommandsMixin
 from .bot_link_handlers_mixin import LinkHandlersMixin
 from .bot_orchestration_mixin import OrchestrationMixin
@@ -131,6 +131,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
 
     async def setup_hook(self) -> None:
         try:
+            await self.tree.set_translator(BotTranslator())
             if self.command_guild_id:
                 guild = discord.Object(id=self.command_guild_id)
                 self.tree.copy_global_to(guild=guild)

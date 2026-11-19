@@ -143,6 +143,23 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **Temiz kapanış** — `close()` sağlık/yedek döngülerini ve arka plan
   görevlerini iptal edip bekler; yarım kalan görevler sessizce bırakılmaz.
 
+## UX/i18n ve kod sağlığı — 19 Kasım 2026
+
+- [x] **Yerelleştirilmiş slash komutları** — `BotTranslator` ile komut adları ve
+  açıklamaları EN istemcilerde çevriliyor (`/help`, `/settings`, `/errors`,
+  `/maintenance`, `/clear-cache`, `/log-delete`, `/log-clear`); parametre ve
+  seçenek açıklamaları da çevrildi.
+- [x] **Eksik slash komutları** — `/platform`, `/logsil` ve `/logtemizle` eklendi;
+  onay adımı `onay: True` seçeneğiyle slash akışına uyarlandı.
+- [x] **i18n kapsam testi** — her anahtarın TR/EN karşılığı ve yer tutucu eşliği
+  `tests/test_i18n.py` ile doğrulanıyor; yardım metni yeni komutları listeliyor.
+- [x] **Coverage** — CI testleri `coverage run` ile çalışıyor, rapor basılıyor ve
+  eşik `%55` (`pyproject.toml`). `requirements-dev.txt` geliştirme araçlarını toplar.
+- [x] **CodeQL** — `.github/workflows/codeql.yml` Python analizini push/PR ve
+  haftalık zamanlamayla çalıştırıyor.
+- [x] **Dependency review** — `.github/workflows/dependency-review.yml` PR'larda
+  yüksek önem dereceli bağımlılık risklerini reddediyor.
+
 ## Sıradaki paketler
 
 - [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).

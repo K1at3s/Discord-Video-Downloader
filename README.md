@@ -225,7 +225,7 @@ Discord komutları (izin verilen kanalda):
 - `!cachetemizle` / `!önbellektemizle` → tüm önbellekleri (kart önbelleği dahil) temizler. **Yalnızca `STATS_OWNER_ID`**.
 - Başarısız bir indirmeden sonra bot, bağlantıyı paylaşan kişi (ve sahip) için **🔁 Tekrar dene** butonu gönderir; buton aynı bağlantıyı yeniden işler ve sonucu ayrı bir işlem kaydı olarak yazar.
 
-**Slash komutlar:** `/yardim`, `/stats`, `/info`, `/cache`, `/cachetemizle`, `/hatalar`, `/bakim`, `/metrics` aynı işlevleri buton/argüman desteğiyle sunar. Eşitleme açılışta otomatik yapılır; komutların anında görünmesi için `.env` içine `COMMAND_GUILD_ID=<sunucu_id>` yazın (boşsa global eşitlenir ve Discord'un önbelleği yüzünden bir süre gecikebilir). `!` komutları için kullanıcı başı `COMMAND_COOLDOWN_SECONDS` (varsayılan 2 sn) spam koruması uygulanır; sahip muaftır.
+**Slash komutlar:** `/yardim`, `/stats`, `/info`, `/cache`, `/cachetemizle`, `/hatalar`, `/bakim`, `/metrics`, `/platform`, `/logsil`, `/logtemizle` aynı işlevleri buton/argüman desteğiyle sunar. İngilizce Discord istemcilerinde komut adları ve açıklamaları yerelleştirilir (`/help`, `/settings`, `/errors`, `/maintenance`, `/clear-cache`, `/log-delete`, `/log-clear`). Eşitleme açılışta otomatik yapılır; komutların anında görünmesi için `.env` içine `COMMAND_GUILD_ID=<sunucu_id>` yazın (boşsa global eşitlenir ve Discord'un önbelleği yüzünden bir süre gecikebilir). `!` komutları için kullanıcı başı `COMMAND_COOLDOWN_SECONDS` (varsayılan 2 sn) spam koruması uygulanır; sahip muaftır.
 
 **Yükleme limiti:** `MAX_UPLOAD_MB=0` (varsayılan) iken bot, mesajın geldiği sunucunun gerçek limitini (`guild.filesize_limit`) kullanır. Böylece 10 MB'lık sunucuda boş yere 20 MB dosya indirilmez, 50 MB'lık sunucuda da gereksiz küçültme yapılmaz. Daha büyük bir değer verirseniz tüm sunucularda üst sınır olur.
 
@@ -256,18 +256,25 @@ Testler, üçüncü taraf web servislerinin her zaman çalışacağını garanti
 Her `push` / `pull_request` aşamasında [`.github/workflows/ci.yml`](.github/workflows/ci.yml) şu adımları çalıştırır:
 
 - `ruff check` — kod kalitesi ve kullanılmayan içe aktarma denetimi (`pyproject.toml` ile yapılandırılmış)
-- `python -m unittest discover -s tests -q` — tüm birim ve akış testleri
+- `coverage run -m unittest discover -s tests -q` — tüm testler ve kapsam raporu; eşik `%55` (`pyproject.toml`)
 - `pip-audit -r requirements.txt` — bilinen güvenlik açığı denetimi (ayrı `security` işi)
 
-İş akışı testleri `windows-latest` ve `ubuntu-latest` üzerinde Python 3.12 ile çalıştırır. Dependabot [`.github/dependabot.yml`](.github/dependabot.yml) ile Python bağımlılıkları ve GitHub Actions sürümlerini haftalık olarak gruplanmış PR'larla günceller.
+[`codeql.yml`](.github/workflows/codeql.yml) Python için statik güvenlik analizini push/PR ve haftalık zamanlamayla çalıştırır. [`dependency-review.yml`](.github/workflows/dependency-review.yml) PR'larda yüksek önem dereceli yeni bağımlılık risklerini reddeder. İş akışı testleri `windows-latest` ve `ubuntu-latest` üzerinde Python 3.12 ile çalıştırır. Dependabot [`.github/dependabot.yml`](.github/dependabot.yml) ile Python bağımlılıkları ve GitHub Actions sürümlerini haftalık olarak gruplanmış PR'larla günceller.
 
 ### Yerel kontroller
+
+Geliştirme araçlarını kurmak için:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+```
 
 Commit öncesi aynı denetimleri elle çalıştırabilirsiniz:
 
 ```powershell
 .\.venv\Scripts\ruff.exe check media_bot tests scripts
-$env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m unittest discover -s tests -q
+$env:PYTHONIOENCODING='utf-8'; .\.venv\Scripts\python.exe -m coverage run -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m coverage report -m
 .\.venv\Scripts\python.exe -m pip_audit -r requirements.txt --progress-spinner off
 ```
 

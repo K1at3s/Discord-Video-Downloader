@@ -103,7 +103,8 @@ class SlashCommandTests(unittest.IsolatedAsyncioTestCase):
             try:
                 names = {command.name for command in bot.tree.get_commands()}
                 self.assertTrue({"yardim", "metrics", "stats", "info", "cache",
-                                 "cachetemizle", "hatalar", "bakim"} <= names)
+                                 "cachetemizle", "hatalar", "bakim", "platform",
+                                 "logsil", "logtemizle"} <= names)
             finally:
                 await bot.close()
 
