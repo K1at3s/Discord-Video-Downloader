@@ -154,11 +154,26 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **i18n kapsam testi** — her anahtarın TR/EN karşılığı ve yer tutucu eşliği
   `tests/test_i18n.py` ile doğrulanıyor; yardım metni yeni komutları listeliyor.
 - [x] **Coverage** — CI testleri `coverage run` ile çalışıyor, rapor basılıyor ve
-  eşik `%55` (`pyproject.toml`). `requirements-dev.txt` geliştirme araçlarını toplar.
+  eşik `%60` (`pyproject.toml`). `requirements-dev.txt` geliştirme araçlarını toplar.
 - [x] **CodeQL** — `.github/workflows/codeql.yml` Python analizini push/PR ve
   haftalık zamanlamayla çalıştırıyor.
 - [x] **Dependency review** — `.github/workflows/dependency-review.yml` PR'larda
-  yüksek önem dereceli bağımlılık risklerini reddediyor.
+  yüksek önem dereceli bağımlılık risklerini reddediyor; Dependency graph kapalıyken
+  iş sessizce atlanıyor, açıldığında otomatik devreye giriyor.
+
+## CI hijyeni ve kapsam — 20 Kasım 2026
+
+- [x] **Dependabot PR'ları** — actions ve python bağımlılığı grupları birleştirildi;
+  yerel `.venv` yeni sürümlere yükseltilip testler doğrulandı.
+- [x] **CI sertleştirme** — `ci.yml`/`codeql.yml` için `concurrency` (aynı dalda
+  eski çalıştırma iptal), `timeout-minutes` ve kökte `permissions: contents: read`.
+- [x] **Dependency review kapısı** — depo ayarında Dependency graph kapalıyken
+  denetim 403 alıyordu; iş artık grafiği yoklayıp yalnızca hazır olduğunda çalışıyor.
+- [x] **İndirme yolu testleri** — `tests/test_video_fit.py`, `tests/test_youtube_flow.py`,
+  `tests/test_youtube_view.py`, `tests/test_x_card.py`: ffmpeg sığdırma, sağlayıcı
+  yarışı/önbellek, YouTube seçim akışı ve X kart normalizasyonu kapsandı.
+  Kapsam `%59` → `%64`; `video_fit` `%98`, `youtube_view` `%93`, `youtube` `%82`,
+  `x_card` `%77`.
 
 ## Sıradaki paketler
 

@@ -256,7 +256,7 @@ Testler, üçüncü taraf web servislerinin her zaman çalışacağını garanti
 Her `push` / `pull_request` aşamasında [`.github/workflows/ci.yml`](.github/workflows/ci.yml) şu adımları çalıştırır:
 
 - `ruff check` — kod kalitesi ve kullanılmayan içe aktarma denetimi (`pyproject.toml` ile yapılandırılmış)
-- `coverage run -m unittest discover -s tests -q` — tüm testler ve kapsam raporu; eşik `%55` (`pyproject.toml`)
+- `coverage run -m unittest discover -s tests -q` — tüm testler ve kapsam raporu; eşik `%60` (`pyproject.toml`)
 - `pip-audit -r requirements.txt` — bilinen güvenlik açığı denetimi (ayrı `security` işi)
 
 [`codeql.yml`](.github/workflows/codeql.yml) Python için statik güvenlik analizini push/PR ve haftalık zamanlamayla çalıştırır. [`dependency-review.yml`](.github/workflows/dependency-review.yml) PR'larda yüksek önem dereceli yeni bağımlılık risklerini reddeder. İş akışı testleri `windows-latest` ve `ubuntu-latest` üzerinde Python 3.12 ile çalıştırır. Dependabot [`.github/dependabot.yml`](.github/dependabot.yml) ile Python bağımlılıkları ve GitHub Actions sürümlerini haftalık olarak gruplanmış PR'larla günceller.
