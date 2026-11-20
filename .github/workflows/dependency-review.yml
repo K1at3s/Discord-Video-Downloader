@@ -11,11 +11,29 @@ jobs:
   review:
     name: Review dependency changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Depoyu indir
         uses: actions/checkout@v7
 
+      # Dependency review, depo ayarlarında "Dependency graph" açık değilse
+      # GitHub API'sinden 403 alır. Grafiği yoklayıp denetimi yalnızca hazır
+      # olduğunda çalıştırıyoruz; böylece PR'lar gereksiz yere kırmızı olmaz.
+      - name: Dependency graph hazır mı?
+        id: graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/sbom" > /dev/null 2>&1; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Dependency graph açık; bağımlılık denetimi çalışacak."
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dependency graph kapalı. Settings > Code security bölümünden açıldığında bu denetim otomatik devreye girer."
+          fi
+
       - name: Bağımlılık değişikliklerini denetle
+        if: steps.graph.outputs.ready == 'true'
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
