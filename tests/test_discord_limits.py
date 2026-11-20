@@ -3,6 +3,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import discord
+
 from media_bot.bot import UPLOAD_CEILING, InteractionMessage, MediaBot, upload_limit
 from media_bot.cooldowns import Cooldowns
 
@@ -93,6 +95,21 @@ class InteractionMessageTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SlashCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_presence_is_playing_idle(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bot = MediaBot(
+                channel_ids=set(), upload_bytes=0, max_links=3, concurrency=2,
+                cookie_file=None, cobalt_url=None, cobalt_key=None,
+                gallery_rs_path=None, database_path=Path(temp) / "bot.sqlite3",
+            )
+            try:
+                self.assertIs(bot.status, discord.Status.idle)
+                self.assertEqual(bot.activity.name, "made by hakixld")
+                self.assertIs(bot.activity.type, discord.ActivityType.playing)
+                self.assertEqual(bot.activity.to_dict()["type"], 0)
+            finally:
+                await bot.close()
+
     async def test_commands_are_registered(self):
         with tempfile.TemporaryDirectory() as temp:
             bot = MediaBot(

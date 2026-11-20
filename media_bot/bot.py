@@ -65,6 +65,9 @@ from .discord_support import (
 
 LOG = logging.getLogger(__name__)
 STATS_OWNER_ID = int(os.getenv("STATS_OWNER_ID", "1065352859195015260"))
+# Discord'da "Oynuyor: made by hakixld" olarak görünür; kimlik doğrulama
+# yüküne eklenir ve yeniden bağlanmalarda korunur.
+PRESENCE_TEXT = "made by hakixld"
 
 
 def _has_media(post: dict) -> bool:
@@ -98,7 +101,14 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
     def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None, user_hourly_limit: int = 30, user_daily_limit: int = 200):
         intents = discord.Intents.default()
         intents.message_content = True
-        super().__init__(intents=intents, allowed_mentions=discord.AllowedMentions.none())
+        # Presence is part of the IDENTIFY payload, so it applies on every
+        # reconnect without an extra gateway round-trip.
+        super().__init__(
+            intents=intents,
+            allowed_mentions=discord.AllowedMentions.none(),
+            activity=discord.Activity(type=discord.ActivityType.playing, name=PRESENCE_TEXT),
+            status=discord.Status.idle,
+        )
         self._background_tasks: set[asyncio.Task] = set()
         self.channel_ids = channel_ids
         self.upload_bytes = upload_bytes

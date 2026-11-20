@@ -174,6 +174,9 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
   yarışı/önbellek, YouTube seçim akışı ve X kart normalizasyonu kapsandı.
   Kapsam `%59` → `%64`; `video_fit` `%98`, `youtube_view` `%93`, `youtube` `%82`,
   `x_card` `%77`.
+- [x] **Durum metni** — bot Discord'da `idle` durumda, “Oynuyor: made by hakixld”
+  etkinliğiyle görünür. Etkinlik IDENTIFY yüküne eklendiğinden yeniden
+  bağlanmalarda korunur; `tests/test_discord_limits.py` bunu doğrular.
 
 ## Sıradaki paketler
 

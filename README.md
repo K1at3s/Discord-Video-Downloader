@@ -21,6 +21,8 @@ Discord sohbetindeki sosyal medya bağlantılarını algılayıp medyayı ve eri
 
 Profil, arama, tüm albüm ve oynatma listesi bağlantıları topluca indirilmez. Özel gönderiler, oturum isteyen içerikler ve bölgesel engeller başarısız olabilir.
 
+Bot, Discord'da **idle** durumda ve **“Oynuyor: made by hakixld”** etkinliğiyle görünür; bu bilgi kimlik doğrulama yüküne eklendiği için yeniden bağlanmalarda da korunur.
+
 ![X kartı örneği](card-preview.png)
 
 ## Gereksinimler
