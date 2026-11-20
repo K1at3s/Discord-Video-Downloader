@@ -18,15 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Depoyu indir
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: CodeQL başlat
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: python
 
       - name: Otomatik derleme
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: Analiz
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
