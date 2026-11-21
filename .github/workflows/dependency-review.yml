@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Depoyu indir
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Dependency review, depo ayarlarında "Dependency graph" açık değilse
       # GitHub API'sinden 403 alır. Grafiği yoklayıp denetimi yalnızca hazır
@@ -34,6 +34,6 @@ jobs:
 
       - name: Bağımlılık değişikliklerini denetle
         if: steps.graph.outputs.ready == 'true'
-        uses: actions/dependency-review-action@v5
+        uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
         with:
           fail-on-severity: high
