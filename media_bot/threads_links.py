@@ -78,7 +78,8 @@ def _threads_scoped(cookies: httpx.Cookies) -> httpx.Cookies:
     """Threads accepts an Instagram session, so reuse it when no jar entry exists."""
     if not any("threads" in (cookie.domain or "") for cookie in cookies.jar):
         for cookie in list(cookies.jar):
-            if (cookie.domain or "").lstrip(".").endswith("instagram.com"):
+            domain = (cookie.domain or "").lstrip(".").lower()
+            if domain == "instagram.com" or domain.endswith(".instagram.com"):
                 for domain in (".threads.com", ".threads.net"):
                     cookies.set(cookie.name, cookie.value, domain=domain)
     return cookies

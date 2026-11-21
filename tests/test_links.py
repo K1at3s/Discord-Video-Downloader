@@ -92,6 +92,26 @@ class LinkTests(unittest.TestCase):
         self.assertIsNotNone(link)
         self.assertIsNone(link.post_id)
 
+    def test_instagram_embed_mirror_links(self):
+        cases = [
+            "https://www.kkinstagram.com/reel/DfTY40ghN52",
+            "https://ddinstagram.com/p/ABC123/",
+            "https://uuinstagram.com/reel/XYZ789/?igsh=abc",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                link = parse_link(url)
+                self.assertIsNotNone(link)
+                self.assertEqual(link.platform, "instagram")
+                self.assertTrue(link.url.startswith("https://www.instagram.com/"))
+
+    def test_x_embed_mirror_links(self):
+        link = parse_link("https://vxtwitter.com/user/status/1234567890")
+        self.assertIsNotNone(link)
+        self.assertEqual(link.platform, "x")
+        self.assertEqual(link.post_id, "1234567890")
+        self.assertEqual(link.url, "https://x.com/i/status/1234567890")
+
 
 if __name__ == "__main__":
     unittest.main()

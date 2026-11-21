@@ -11,6 +11,23 @@ from .safety import is_safe_http_url
 
 URL_RE = re.compile(r"https?://[^\s<>\[\]()]+", re.IGNORECASE)
 
+INSTAGRAM_MIRRORS = {
+    "ddinstagram.com", "www.ddinstagram.com",
+    "kkinstagram.com", "www.kkinstagram.com",
+    "uuinstagram.com", "www.uuinstagram.com",
+    "eeinstagram.com", "www.eeinstagram.com",
+    "ii.instagram.com",
+    "instagramez.com", "www.instagramez.com",
+}
+
+X_MIRRORS = {
+    "vxtwitter.com", "www.vxtwitter.com",
+    "fixvx.com", "www.fixvx.com",
+    "fxtwitter.com", "www.fxtwitter.com",
+    "fixupx.com", "www.fixupx.com",
+    "twixter.net", "www.twixter.net",
+}
+
 
 @dataclass(frozen=True)
 class PostLink:
@@ -51,11 +68,14 @@ def parse_link(raw: str) -> PostLink | None:
 
     # Strip tracking query strings. Keep the original path for short-link redirects.
     clean = urlunsplit(("https", host, path, "", ""))
-    if host in {"x.com", "twitter.com", "www.x.com", "www.twitter.com", "mobile.twitter.com"}:
+    if host in {"x.com", "twitter.com", "www.x.com", "www.twitter.com", "mobile.twitter.com"} or host in X_MIRRORS:
         match = re.fullmatch(r"/(?:i|[^/]+)/status/(\d+)(?:/.*)?", path, re.IGNORECASE)
         if match:
+            clean = urlunsplit(("https", "x.com", f"/i/status/{match.group(1)}", "", ""))
             return PostLink("x", clean, match.group(1))
-    elif _host(host, "instagram.com"):
+    elif _host(host, "instagram.com") or host in INSTAGRAM_MIRRORS:
+        canonical_host = "www.instagram.com"
+        clean = urlunsplit(("https", canonical_host, path, "", ""))
         if re.fullmatch(r"/(?:p|reel|tv)/[\w-]+/?", path, re.IGNORECASE):
             return PostLink("instagram", clean)
         if re.search(r"/stories/", path, re.IGNORECASE) or re.fullmatch(r"/story/[\w-]+/?", path, re.IGNORECASE) or re.search(r"/highlights/", path, re.IGNORECASE):
