@@ -180,4 +180,4 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 
 ## Sıradaki paketler
 
-- [ ] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut).
+- [⏸️] Docker/Compose paketleme (Cobalt + bot + ffmpeg tek komut). **Gelecekte değerlendirilecek.**
