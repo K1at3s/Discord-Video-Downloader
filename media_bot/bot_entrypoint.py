@@ -86,6 +86,8 @@ def main() -> None:
             concurrency=_positive_int("MAX_CONCURRENT_JOBS", 2, 10),
             user_hourly_limit=_bounded_int("USER_HOURLY_LIMIT", 30, 0, 10000),
             user_daily_limit=_bounded_int("USER_DAILY_LIMIT", 200, 0, 100000),
+            guild_hourly_limit=_bounded_int("GUILD_HOURLY_LIMIT", 0, 0, 100000),
+            guild_daily_limit=_bounded_int("GUILD_DAILY_LIMIT", 0, 0, 1000000),
             command_guild_id=_bounded_int("COMMAND_GUILD_ID", 0, 0, 2**63 - 1) or None,
             cookie_file=cookie_file,
             cobalt_url=cobalt_url,

@@ -37,7 +37,10 @@ def _day_key(now: float) -> int:
     return int((now + DAY_OFFSET_SECONDS) // 86400)
 
 
-class UserQuota:
+class _WindowQuota:
+    table: str
+    id_column: str
+
     def __init__(self, path: Path, hourly_limit: int = 0, daily_limit: int = 0):
         self.path = path
         self.hourly_limit = max(0, int(hourly_limit))
@@ -45,8 +48,8 @@ class UserQuota:
         path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as db, db:
             db.execute(
-                "CREATE TABLE IF NOT EXISTS user_quota ("
-                "user_id INTEGER PRIMARY KEY, "
+                f"CREATE TABLE IF NOT EXISTS {self.table} ("
+                f"{self.id_column} INTEGER PRIMARY KEY, "
                 "hour_start INTEGER NOT NULL DEFAULT 0, "
                 "hour_count INTEGER NOT NULL DEFAULT 0, "
                 "day_start INTEGER NOT NULL DEFAULT 0, "
@@ -62,7 +65,7 @@ class UserQuota:
     def enabled(self) -> bool:
         return bool(self.hourly_limit or self.daily_limit)
 
-    def claim(self, user_id: int, now: float | None = None) -> QuotaDecision:
+    def claim(self, entity_id: int, now: float | None = None) -> QuotaDecision:
         """Atomically consume one request from both windows when allowed."""
         if not self.enabled:
             return QuotaDecision(allowed=True)
@@ -72,9 +75,9 @@ class UserQuota:
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT hour_start, hour_count, day_start, day_count "
-                "FROM user_quota WHERE user_id = ?",
-                (user_id,),
+                f"SELECT hour_start, hour_count, day_start, day_count "
+                f"FROM {self.table} WHERE {self.id_column} = ?",
+                (entity_id,),
             ).fetchone()
             hour_count = int(row[1]) if row and int(row[0]) == hour_key else 0
             day_count = int(row[3]) if row and int(row[2]) == day_key else 0
@@ -95,15 +98,15 @@ class UserQuota:
             hour_count += 1
             day_count += 1
             db.execute(
-                "INSERT INTO user_quota "
-                "(user_id, hour_start, hour_count, day_start, day_count) "
+                f"INSERT INTO {self.table} "
+                f"({self.id_column}, hour_start, hour_count, day_start, day_count) "
                 "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(user_id) DO UPDATE SET "
+                f"ON CONFLICT({self.id_column}) DO UPDATE SET "
                 "hour_start = excluded.hour_start, "
                 "hour_count = excluded.hour_count, "
                 "day_start = excluded.day_start, "
                 "day_count = excluded.day_count",
-                (user_id, hour_key, hour_count, day_key, day_count),
+                (entity_id, hour_key, hour_count, day_key, day_count),
             )
             remaining = []
             if self.hourly_limit:
@@ -112,36 +115,36 @@ class UserQuota:
                 remaining.append(self.daily_limit - day_count)
             return QuotaDecision(allowed=True, remaining=max(0, min(remaining or [0])))
 
-    async def aclaim(self, user_id: int, now: float | None = None) -> QuotaDecision:
-        return await asyncio.to_thread(self.claim, user_id, now)
+    async def aclaim(self, entity_id: int, now: float | None = None) -> QuotaDecision:
+        return await asyncio.to_thread(self.claim, entity_id, now)
 
     def summary(self, now: float | None = None) -> dict[str, int]:
-        """Aggregate current-window usage across all tracked users."""
+        """Aggregate current-window usage across all tracked entities."""
         now = time.time() if now is None else float(now)
         hour_key = _hour_key(now)
         day_key = _day_key(now)
         with closing(self._connect()) as db:
             rows = db.execute(
-                "SELECT hour_start, hour_count, day_start, day_count FROM user_quota"
+                f"SELECT hour_start, hour_count, day_start, day_count FROM {self.table}"
             ).fetchall()
         return {
-            "users": len(rows),
+            "entities": len(rows),
             "hourly": sum(int(row[1]) for row in rows if int(row[0]) == hour_key),
             "daily": sum(int(row[3]) for row in rows if int(row[2]) == day_key),
             "hourly_limit": self.hourly_limit,
             "daily_limit": self.daily_limit,
         }
 
-    def usage(self, user_id: int, now: float | None = None) -> dict[str, int]:
-        """Return current window usage for panels/tests without consuming a token."""
+    def usage(self, entity_id: int, now: float | None = None) -> dict[str, int]:
+        """Return current window usage without consuming a token."""
         now = time.time() if now is None else float(now)
         hour_key = _hour_key(now)
         day_key = _day_key(now)
         with closing(self._connect()) as db:
             row = db.execute(
-                "SELECT hour_start, hour_count, day_start, day_count "
-                "FROM user_quota WHERE user_id = ?",
-                (user_id,),
+                f"SELECT hour_start, hour_count, day_start, day_count "
+                f"FROM {self.table} WHERE {self.id_column} = ?",
+                (entity_id,),
             ).fetchone()
         hour_count = int(row[1]) if row and int(row[0]) == hour_key else 0
         day_count = int(row[3]) if row and int(row[2]) == day_key else 0
@@ -151,3 +154,23 @@ class UserQuota:
             "daily": day_count,
             "daily_limit": self.daily_limit,
         }
+
+
+class UserQuota(_WindowQuota):
+    table = "user_quota"
+    id_column = "user_id"
+
+    def summary(self, now: float | None = None) -> dict[str, int]:
+        data = super().summary(now)
+        data["users"] = data.pop("entities")
+        return data
+
+
+class GuildQuota(_WindowQuota):
+    table = "guild_quota"
+    id_column = "guild_id"
+
+    def summary(self, now: float | None = None) -> dict[str, int]:
+        data = super().summary(now)
+        data["guilds"] = data.pop("entities")
+        return data

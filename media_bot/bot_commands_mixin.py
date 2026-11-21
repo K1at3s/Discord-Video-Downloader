@@ -69,6 +69,18 @@ class AdminCommandsMixin:
                     f"{summary['hourly_limit'] or '∞'} saatlik · {summary['daily']}/"
                     f"{summary['daily_limit'] or '∞'} günlük · {summary['users']} kullanıcı"
                 )
+        guild_quota = getattr(self, "guild_quota", None)
+        if guild_quota is not None and guild_quota.enabled:
+            try:
+                summary = guild_quota.summary()
+            except Exception:
+                LOG.exception("Guild kota özeti okunamadı")
+            else:
+                parts.append(
+                    f"Sunucu kotası (bu saat/gün): {summary['hourly']}/"
+                    f"{summary['hourly_limit'] or '∞'} saatlik · {summary['daily']}/"
+                    f"{summary['daily_limit'] or '∞'} günlük · {summary['guilds']} sunucu"
+                )
         slots = getattr(self, "job_slots", None)
         if slots is not None:
             try:

@@ -161,6 +161,31 @@ class OrchestrationMixin:
                                     elapsed_ms=int((time.monotonic() - started) * 1000),
                                 )
                                 return
+                    guild_quota = getattr(self, "guild_quota", None)
+                    guild_id = getattr(message.guild, "id", None)
+                    if guild_quota is not None and guild_id is not None and message.author.id != owner_id:
+                        try:
+                            decision = await guild_quota.aclaim(guild_id)
+                        except Exception:
+                            LOG.exception("Guild quota check failed")
+                        else:
+                            if not decision.allowed:
+                                await self._reply(
+                                    message, i18n.quota_message(decision, locale, scope="guild")
+                                )
+                                REQUESTS.record(
+                                    guild_id=guild_id,
+                                    guild_name=getattr(message.guild, "name", None),
+                                    channel_id=getattr(message.channel, "id", None),
+                                    user_id=getattr(message.author, "id", None),
+                                    user_name=str(getattr(message.author, "name", message.author)),
+                                    platform=link.platform,
+                                    url=link.url,
+                                    outcome="skipped",
+                                    detail="guild_quota",
+                                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                                )
+                                return
                     try:
                         result = await self._handle_link(message, link, status_message=status_message)
                         if isinstance(result, tuple):

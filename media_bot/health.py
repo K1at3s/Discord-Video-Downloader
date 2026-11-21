@@ -15,9 +15,16 @@ class _Handler(BaseHTTPRequestHandler):
     server: HealthServer
 
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] not in {"/", "/healthz"}:
+        path = self.path.split("?", 1)[0]
+        if path == "/metrics":
+            self._serve_metrics()
+            return
+        if path not in {"/", "/healthz"}:
             self.send_error(404)
             return
+        self._serve_health()
+
+    def _serve_health(self) -> None:
         try:
             payload = self.server.payload()
             status = 200
@@ -33,6 +40,25 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_metrics(self) -> None:
+        metrics = self.server.metrics_payload
+        if metrics is None:
+            self.send_error(404)
+            return
+        try:
+            body = metrics().encode("utf-8")
+            status = 200
+        except Exception as exc:
+            LOG.warning("Metrics payload failed: %s", exc)
+            body = b"# metrics error\n"
+            status = 500
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *_args) -> None:
         return
 
@@ -40,22 +66,27 @@ class _Handler(BaseHTTPRequestHandler):
 class HealthServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], payload: Callable[[], dict]):
+    def __init__(self, address: tuple[str, int], payload: Callable[[], dict],
+                 metrics_payload: Callable[[], str] | None = None):
         super().__init__(address, _Handler)
         self.payload = payload
+        self.metrics_payload = metrics_payload
 
 
 def start_health_server(host: str, port: int,
-                        payload: Callable[[], dict]) -> HealthServer | None:
+                        payload: Callable[[], dict],
+                        metrics_payload: Callable[[], str] | None = None) -> HealthServer | None:
     """Bind and serve in a daemon thread; ``port <= 0`` disables the endpoint."""
     if port <= 0:
         return None
     try:
-        server = HealthServer((host, port), payload)
+        server = HealthServer((host, port), payload, metrics_payload=metrics_payload)
     except OSError as exc:
         LOG.warning("Health endpoint could not bind %s:%s: %s", host, port, exc)
         return None
     thread = threading.Thread(target=server.serve_forever, name="healthz", daemon=True)
     thread.start()
     LOG.info("Health endpoint: http://%s:%s/healthz", host, port)
+    if metrics_payload is not None:
+        LOG.info("Metrics endpoint: http://%s:%s/metrics", host, port)
     return server

@@ -177,6 +177,16 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
 - [x] **Durum metni** — bot Discord'da `idle` durumda, “Oynuyor: made by hakixld”
   etkinliğiyle görünür. Etkinlik IDENTIFY yüküne eklendiğinden yeniden
   bağlanmalarda korunur; `tests/test_discord_limits.py` bunu doğrular.
+- [x] **Kapsam testleri (web/threads)** — `tests/test_web_providers_extra.py` ve
+  `tests/test_threads_links_extra.py`: Threads sayfa/threadsdl ayrıştırması,
+  share link çözümleme, çerez kapsamı ve sağlayıcı URL filtreleri kapsandı.
+- [x] **Güvenlik sertleştirme** — Depoda secret scanning, push protection ve
+  Dependabot security updates etkinleştirildi; GitHub Actions adımları commit
+  SHA'larına sabitlendi.
+- [x] **Ölçek/operasyon** — `/metrics` Prometheus text format döndürür;
+  `DB_VACUUM_HOURS` ile periyodik SQLite `integrity_check`/`VACUUM` bakımı
+  çalışır; `GUILD_HOURLY_LIMIT`/`GUILD_DAILY_LIMIT` ile sunucu bazlı kota
+  uygulanır.
 
 ## Sıradaki paketler
 

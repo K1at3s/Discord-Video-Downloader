@@ -145,6 +145,26 @@ class HealthServerTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
+    def test_metrics_endpoint_returns_prometheus_text(self):
+        server = HealthServer(
+            ("127.0.0.1", 0),
+            lambda: {"status": "ok"},
+            metrics_payload=lambda: "# HELP x test\n# TYPE x gauge\nx 1\n",
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
+                body = response.read().decode("utf-8")
+                content_type = response.headers.get("Content-Type", "")
+            self.assertIn("text/plain", content_type)
+            self.assertIn("# TYPE x gauge", body)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
 
 class BotHealthPayloadTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -173,6 +193,12 @@ class BotHealthPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("open", payload["providers"])
         self.assertEqual(payload["cookies"]["total"], 0)
         self.assertGreaterEqual(payload["uptime_seconds"], 0)
+
+    async def test_metrics_payload_prometheus_format(self):
+        text = self.bot.metrics_payload()
+        self.assertIn("# TYPE discord_video_bot_up gauge", text)
+        self.assertIn("discord_video_bot_queue_capacity 2.0", text)
+        self.assertIn("discord_video_bot_guilds 0.0", text)
 
     async def test_no_health_server_when_port_disabled(self):
         with patch.dict(os.environ, {"HEALTH_PORT": "0"}):

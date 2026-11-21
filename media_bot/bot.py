@@ -39,7 +39,7 @@ from .request_log import REQUESTS  # noqa: F401
 from .sizes import estimate_reddit_media_bytes, estimate_urls_bytes  # noqa: F401
 from .spotify import fetch_track, find_audio_source  # noqa: F401
 from .threads_links import highlight_post_link, resolve_threads_link  # noqa: F401
-from .user_quota import UserQuota
+from .user_quota import GuildQuota, UserQuota
 from .video_fit import fit_video  # noqa: F401
 from .x_card import create_card, fetch_post  # noqa: F401
 from .youtube import download_youtube  # noqa: F401
@@ -98,7 +98,7 @@ def _extract_download_caption(folder: Path) -> str | None:
 
 
 class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discord.Client):
-    def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None, user_hourly_limit: int = 30, user_daily_limit: int = 200):
+    def __init__(self, *, channel_ids: set[int], upload_bytes: int, max_links: int, concurrency: int, cookie_file: Path | None, cobalt_url: str | None, cobalt_key: str | None, gallery_rs_path: Path | None, database_path: Path | None = None, command_guild_id: int | None = None, user_hourly_limit: int = 30, user_daily_limit: int = 200, guild_hourly_limit: int = 0, guild_daily_limit: int = 0):
         intents = discord.Intents.default()
         intents.message_content = True
         # Presence is part of the IDENTIFY payload, so it applies on every
@@ -125,12 +125,14 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         self.started_at = time.time()
         self.adult_quota = AdultQuota(self.database_path)
         self.user_quota = UserQuota(self.database_path, user_hourly_limit, user_daily_limit)
+        self.guild_quota = GuildQuota(self.database_path, guild_hourly_limit, guild_daily_limit)
         self._health_task: asyncio.Task | None = None
         self._health_skips = 0
         self._backup_task: asyncio.Task | None = None
         self._health_server = None
         self._cookie_checked = False
         self._disk_warned_at = 0.0
+        self._last_vacuum_at = 0.0
         try:
             cooldown = float(os.getenv("COMMAND_COOLDOWN_SECONDS", "2") or 2)
         except ValueError:
@@ -198,6 +200,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                 os.getenv("HEALTH_HOST", "127.0.0.1").strip() or "127.0.0.1",
                 _bounded_int("HEALTH_PORT", 0, 0, 65535),
                 self.health_payload,
+                self.metrics_payload,
             )
         if self._backup_task is None or self._backup_task.done():
             if env_enabled("BACKUP_ENABLED") is not False:
@@ -265,6 +268,74 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
             },
         }
 
+    def metrics_payload(self) -> str:
+        """Prometheus text exposition for the local ``/metrics`` endpoint."""
+        payload = self.health_payload()
+        lines: list[str] = []
+
+        def gauge(name: str, value: float | int, help_text: str) -> None:
+            lines.append(f"# HELP {name} {help_text}")
+            lines.append(f"# TYPE {name} gauge")
+            lines.append(f"{name} {float(value)}")
+
+        gauge("discord_video_bot_up", 1 if payload.get("status") == "ok" else 0,
+              "Whether the bot is ready.")
+        gauge("discord_video_bot_uptime_seconds", payload.get("uptime_seconds", 0),
+              "Process uptime in seconds.")
+        gauge("discord_video_bot_guilds", payload.get("guilds", 0),
+              "Number of guilds the bot is in.")
+        gauge("discord_video_bot_latency_ms", payload.get("latency_ms", 0),
+              "Discord gateway latency in milliseconds.")
+        queue = payload.get("queue") or {}
+        gauge("discord_video_bot_queue_active", queue.get("active", 0),
+              "Active download jobs.")
+        gauge("discord_video_bot_queue_waiting", queue.get("waiting", 0),
+              "Waiting download jobs.")
+        gauge("discord_video_bot_queue_capacity", queue.get("capacity", 0),
+              "Maximum concurrent download jobs.")
+        disk = payload.get("disk") or {}
+        if disk.get("ok") and disk.get("free_bytes") is not None:
+            gauge("discord_video_bot_disk_free_bytes", disk["free_bytes"],
+                  "Free disk bytes on the data volume.")
+            if disk.get("total_bytes") is not None:
+                gauge("discord_video_bot_disk_total_bytes", disk["total_bytes"],
+                      "Total disk bytes on the data volume.")
+        for cache_name, key in (("media_cache", "cache"), ("card_cache", "card_cache")):
+            cache = payload.get(key) or {}
+            for field in ("entries", "bytes", "hits", "misses", "stores"):
+                gauge(f"discord_video_bot_{cache_name}_{field}", cache.get(field, 0),
+                      f"{cache_name} {field}.")
+        quota = getattr(self, "user_quota", None)
+        if quota is not None and quota.enabled:
+            try:
+                summary = quota.summary()
+            except Exception:
+                summary = {}
+            gauge("discord_video_bot_quota_hourly_used", summary.get("hourly", 0),
+                  "Hourly quota usage across users.")
+            gauge("discord_video_bot_quota_daily_used", summary.get("daily", 0),
+                  "Daily quota usage across users.")
+            gauge("discord_video_bot_quota_hourly_limit", summary.get("hourly_limit", 0),
+                  "Configured hourly quota limit.")
+            gauge("discord_video_bot_quota_daily_limit", summary.get("daily_limit", 0),
+                  "Configured daily quota limit.")
+        guild_quota = getattr(self, "guild_quota", None)
+        if guild_quota is not None and guild_quota.enabled:
+            try:
+                summary = guild_quota.summary()
+            except Exception:
+                summary = {}
+            gauge("discord_video_bot_guild_quota_hourly_used", summary.get("hourly", 0),
+                  "Hourly quota usage across guilds.")
+            gauge("discord_video_bot_guild_quota_daily_used", summary.get("daily", 0),
+                  "Daily quota usage across guilds.")
+            gauge("discord_video_bot_guild_quota_hourly_limit", summary.get("hourly_limit", 0),
+                  "Configured guild hourly quota limit.")
+            gauge("discord_video_bot_guild_quota_daily_limit", summary.get("daily_limit", 0),
+                  "Configured guild daily quota limit.")
+        lines.append("")
+        return "\n".join(lines)
+
     async def _warn_cookie_expiry(self) -> None:
         warning = cookie_warning(self.cookie_file)
         if not warning:
@@ -279,18 +350,27 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
     async def _backup_loop(self) -> None:
         interval_hours = _bounded_int("BACKUP_INTERVAL_HOURS", 24, 1, 168)
         keep = _bounded_int("BACKUP_KEEP", 7, 1, 90)
+        vacuum_hours = _bounded_int("DB_VACUUM_HOURS", 168, 0, 24 * 30)
         root = self.database_path.parent / "backups"
         # Give startup work (migrations, log panel) a moment before touching disks.
         await asyncio.sleep(60)
         while not self.is_closed():
             try:
-                await asyncio.to_thread(
-                    backup_databases, database_paths(self.database_path), root, keep,
-                )
+                paths = database_paths(self.database_path)
+                await asyncio.to_thread(backup_databases, paths, root, keep)
+                now = time.time()
+                vacuum_due = bool(vacuum_hours) and (now - self._last_vacuum_at >= vacuum_hours * 3600)
+                from .sqlite_util import maintain_databases
+                results = await asyncio.to_thread(maintain_databases, paths, vacuum_enabled=vacuum_due)
+                if vacuum_due and any(info.get("vacuumed") for info in results.values()):
+                    self._last_vacuum_at = now
+                for db_path, info in results.items():
+                    if not info.get("integrity_ok", True):
+                        LOG.warning("SQLite integrity_check failed: %s -> %s", db_path, info.get("integrity"))
             except asyncio.CancelledError:
                 raise
             except Exception:
-                LOG.exception("Veritabanı yedeği alınamadı")
+                LOG.exception("Veritabanı yedeği/bakımı başarısız")
             await self._warn_disk_space()
             await asyncio.sleep(interval_hours * 3600)
 

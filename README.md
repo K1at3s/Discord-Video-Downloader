@@ -74,7 +74,7 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 
 **Günlük dosyası:** `data/bot.log` varsayılan olarak 10 MB'ta döner ve 7 eski dosya tutar (`LOG_FILE`, `LOG_LEVEL`).
 
-**Sağlık uç noktası:** `HEALTH_PORT` sıfırdan büyükse `http://127.0.0.1:<port>/healthz` JSON döner: durum, uptime, sunucu sayısı, gecikme, iş kuyruğu (çalışan/bekleyen/kapasite), boş disk ve eşik, son yedek yaşı, açık devre kesiciler, Cobalt yapılandırması, bakım modu ve çerez sayıları. Varsayılan kapalıdır; dışarıya açmadan önce güvenlik duvarını ve ters vekili düşünün.
+**Sağlık uç noktası:** `HEALTH_PORT` sıfırdan büyükse `http://127.0.0.1:<port>/healthz` JSON, `http://127.0.0.1:<port>/metrics` Prometheus text format döner. `/healthz`; durum, uptime, sunucu sayısı, gecikme, iş kuyruğu (çalışan/bekleyen/kapasite), boş disk ve eşik, son yedek yaşı, açık devre kesiciler, Cobalt yapılandırması, bakım modu ve çerez sayılarını içerir. Varsayılan kapalıdır; dışarıya açmadan önce güvenlik duvarını ve ters vekili düşünün.
 
 **Yedekler:** Bot her `BACKUP_INTERVAL_HOURS` saatte (varsayılan 24) `bot.sqlite3`, `provider_metrics.sqlite3` ve `request_log.sqlite3` dosyalarını `data/backups/<tarih>/` altına `sqlite3.Connection.backup` ile kopyalar; `BACKUP_KEEP` kadar klasör saklar. Geri yüklemek için botu durdurup ilgili dosyayı `data/` altına kopyalayın.
 
@@ -112,6 +112,8 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 | `CARD_CACHE_MAX_MB` | `256` | X/Reddit kart önbelleği toplam boyut sınırı (MB) |
 | `USER_HOURLY_LIMIT` | `30` | Kullanıcı başına saatlik genel bağlantı limiti; `0` kapatır |
 | `USER_DAILY_LIMIT` | `200` | Kullanıcı başına günlük genel bağlantı limiti; `0` kapatır |
+| `GUILD_HOURLY_LIMIT` | `0` | Sunucu başına saatlik genel bağlantı limiti; `0` kapatır |
+| `GUILD_DAILY_LIMIT` | `0` | Sunucu başına günlük genel bağlantı limiti; `0` kapatır |
 | `STATS_OWNER_ID` | `1065352859195015260` | `!stats` / `!panel` ve başka kullanıcının `!info` sorgusunu kullanabilecek tek Discord kullanıcı ID'si |
 | `MAINTENANCE_MODE` | *(boş)* | `1` ise bot açılışta bakım modunda başlar; boşsa son durum `data/maintenance.json` dosyasından okunur |
 | `MAINTENANCE_MESSAGE` | *(varsayılan metin)* | Bakım açıkken kullanıcılara gösterilecek özel mesaj |
@@ -124,6 +126,7 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 | `BACKUP_ENABLED` | `1` | Günlük SQLite yedeği (`data/backups/`) açık/kapalı |
 | `BACKUP_INTERVAL_HOURS` | `24` | Yedek aralığı (saat) |
 | `BACKUP_KEEP` | `7` | Saklanan yedek klasörü sayısı |
+| `DB_VACUUM_HOURS` | `168` | SQLite bakım döngüsünde `VACUUM` aralığı (saat); `0` kapatır, `integrity_check` yine çalışır |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
 

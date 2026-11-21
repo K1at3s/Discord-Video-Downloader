@@ -45,9 +45,11 @@ def wait_text(seconds: int | float, locale: str) -> str:
     return f"{hours} saat {remainder} dakika" if remainder else f"{hours} saat"
 
 
-def quota_message(decision: Any, locale: str) -> str:
-    key = "quota_daily" if getattr(decision, "kind", "") == "daily" else "quota_hourly"
-    return t(key, locale, limit=getattr(decision, "limit", 0),
+def quota_message(decision: Any, locale: str, scope: str = "user") -> str:
+    suffix = "guild_daily" if getattr(decision, "kind", "") == "daily" else "guild_hourly"
+    if scope != "guild":
+        suffix = "quota_daily" if getattr(decision, "kind", "") == "daily" else "quota_hourly"
+    return t(suffix, locale, limit=getattr(decision, "limit", 0),
              wait=wait_text(getattr(decision, "retry_after", 0), locale))
 
 
@@ -217,6 +219,14 @@ _STRINGS: dict[str, dict[str, str]] = {
     "quota_daily": {
         "tr": "⏳ Günlük bağlantı hakkın doldu ({limit}). Yaklaşık {wait} sonra tekrar dene.",
         "en": "⏳ Your daily link limit is used up ({limit}). Try again in about {wait}.",
+    },
+    "guild_hourly": {
+        "tr": "⏳ Bu sunucunun saatlik bağlantı kotası doldu ({limit}). Yaklaşık {wait} sonra tekrar dene.",
+        "en": "⏳ This server's hourly link quota is used up ({limit}). Try again in about {wait}.",
+    },
+    "guild_daily": {
+        "tr": "⏳ Bu sunucunun günlük bağlantı kotası doldu ({limit}). Yaklaşık {wait} sonra tekrar dene.",
+        "en": "⏳ This server's daily link quota is used up ({limit}). Try again in about {wait}.",
     },
     "error_private": {
         "tr": "🔒 Bu gönderi herkese açık değil (giriş/özel hesap).",
