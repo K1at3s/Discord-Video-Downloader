@@ -350,6 +350,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
     async def _backup_loop(self) -> None:
         interval_hours = _bounded_int("BACKUP_INTERVAL_HOURS", 24, 1, 168)
         keep = _bounded_int("BACKUP_KEEP", 7, 1, 90)
+        max_age_days = _bounded_int("BACKUP_MAX_AGE_DAYS", 30, 0, 3650)
         vacuum_hours = _bounded_int("DB_VACUUM_HOURS", 168, 0, 24 * 30)
         root = self.database_path.parent / "backups"
         # Give startup work (migrations, log panel) a moment before touching disks.
@@ -357,7 +358,9 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         while not self.is_closed():
             try:
                 paths = database_paths(self.database_path)
-                await asyncio.to_thread(backup_databases, paths, root, keep)
+                await asyncio.to_thread(backup_databases, paths, root, keep, max_age_days=max_age_days)
+                from .backup import cleanup_stale_temp_dirs
+                await asyncio.to_thread(cleanup_stale_temp_dirs)
                 now = time.time()
                 vacuum_due = bool(vacuum_hours) and (now - self._last_vacuum_at >= vacuum_hours * 3600)
                 from .sqlite_util import maintain_databases
@@ -367,6 +370,12 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                 for db_path, info in results.items():
                     if not info.get("integrity_ok", True):
                         LOG.warning("SQLite integrity_check failed: %s -> %s", db_path, info.get("integrity"))
+                        MAINTENANCE.set(True)
+                        try:
+                            owner = await self.fetch_user(self.owner_id)
+                            await owner.send(f"⚠️ SQLite integrity_check başarısız: `{db_path}` -> `{info.get('integrity')}`. Bakım modu açıldı.")
+                        except Exception:
+                            LOG.warning("Integrity failure notice could not be sent")
             except asyncio.CancelledError:
                 raise
             except Exception:

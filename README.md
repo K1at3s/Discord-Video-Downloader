@@ -76,7 +76,7 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 
 **Sağlık uç noktası:** `HEALTH_PORT` sıfırdan büyükse `http://127.0.0.1:<port>/healthz` JSON, `http://127.0.0.1:<port>/metrics` Prometheus text format döner. `/healthz`; durum, uptime, sunucu sayısı, gecikme, iş kuyruğu (çalışan/bekleyen/kapasite), boş disk ve eşik, son yedek yaşı, açık devre kesiciler, Cobalt yapılandırması, bakım modu ve çerez sayılarını içerir. Varsayılan kapalıdır; dışarıya açmadan önce güvenlik duvarını ve ters vekili düşünün.
 
-**Yedekler:** Bot her `BACKUP_INTERVAL_HOURS` saatte (varsayılan 24) `bot.sqlite3`, `provider_metrics.sqlite3` ve `request_log.sqlite3` dosyalarını `data/backups/<tarih>/` altına `sqlite3.Connection.backup` ile kopyalar; `BACKUP_KEEP` kadar klasör saklar. Geri yüklemek için botu durdurup ilgili dosyayı `data/` altına kopyalayın.
+**Yedekler:** Bot her `BACKUP_INTERVAL_HOURS` saatte (varsayılan 24) `bot.sqlite3`, `provider_metrics.sqlite3` ve `request_log.sqlite3` dosyalarını `data/backups/<tarih>/` altına `sqlite3.Connection.backup` ile kopyalar; `BACKUP_KEEP` kadar klasör saklar ve `BACKUP_MAX_AGE_DAYS` değerinden eski klasörleri temizler. Geri yükleme için botu durdurun, `data/` içindeki mevcut `.sqlite3` dosyalarını yedekleyin, sonra `scripts/restore_backup.ps1 -BackupDir data/backups/<tarih>` ile seçili yedeği geri kopyalayın. Script çalışırken botun kapalı olduğundan emin olun. SQLite `integrity_check` başarısız olursa bot bakım moduna alınır ve sahibine uyarı gönderilir; ayrıntı için günlükleri kontrol edin.
 
 **Çerez uyarısı:** Açılışta `COOKIE_FILE` Netscape biçiminde değilse, süresi dolmuşsa veya 3 gün içinde dolacaksa bot sahibine DM ve günlük uyarısı gönderir.
 
@@ -126,6 +126,7 @@ Görev, `scripts\run-bot-loop.ps1` betiğini çalıştırır. Betik bir mutex il
 | `BACKUP_ENABLED` | `1` | Günlük SQLite yedeği (`data/backups/`) açık/kapalı |
 | `BACKUP_INTERVAL_HOURS` | `24` | Yedek aralığı (saat) |
 | `BACKUP_KEEP` | `7` | Saklanan yedek klasörü sayısı |
+| `BACKUP_MAX_AGE_DAYS` | `30` | Bu yaştan eski yedek klasörlerini temizler; `0` kapatır |
 | `DB_VACUUM_HOURS` | `168` | SQLite bakım döngüsünde `VACUUM` aralığı (saat); `0` kapatır, `integrity_check` yine çalışır |
 
 Kanal ID'si ve Cobalt anahtarı zorunlu değildir. Gerçek `.env`, çerezler, SQLite veritabanı ve geçici indirmeler Git'e eklenmez.
@@ -164,10 +165,11 @@ docker compose -f cobalt.compose.yaml up -d
 
 ## Sunucu ayarları (`/ayar`, `!ayar`)
 
-- Yöneticiler (`Sunucuyu yönet` veya bot sahibi) `!ayar thread ac|kapat`, `!ayar youtube sor|mp3|360|720|1080` ve `!ayar dil tr|en|auto` ile sunucu bazlı tercihleri ayarlar; `!ayar` mevcut ayarları gösterir. Slash komutu `/ayar otomatik_thread:`, `/ayar youtube:` ve `/ayar dil:` aynı işi yapar.
+- Yöneticiler (`Sunucuyu yönet` veya bot sahibi) `!ayar thread ac|kapat`, `!ayar youtube sor|mp3|360|720|1080`, `!ayar dil tr|en|auto`, `!ayar yanit ac|kapat` ve `!ayar platform <ad> ac|kapat` ile sunucu bazlı tercihleri ayarlar; `!ayar` mevcut ayarları gösterir. Slash komutu `/ayar` aynı ayarları sunar.
 - Otomatik thread açıksa, bağlantılı bir mesajın altında bir thread açılır ve sonraki yanıtlar oraya yönlendirilir.
 - YouTube kalitesi `sor` dışında bir değer seçildiğinde düğme penceresi atlanır ve varsayılan kalite doğrudan indirilir. `sor` durumunda kullanıcıya MP3/360/720/1080 düğmeleri gösterilir.
 - Dil ayarı `tr`/`en`/`auto` olabilir. Sunucu ayarı yoksa veya `auto` seçilirse varsayılan Türkçe kullanılır; Türkçe ve İngilizce durum, hata, kota ve ayar metinleri hazırdır.
+- Kapalı platform bağlantıları o sunucuda işlenmez ve kullanıcıya kısa bilgilendirme mesajı döner.
 
 ## +18 koruması ve SQLite
 
@@ -220,6 +222,7 @@ Discord komutları (izin verilen kanalda):
 - `!stats` / `!istatistik` / `!panel` / `!admin` → yönetim paneli: toplam kullanıcı/sunucu, bugün aktif, toplam istek, başarılı/başarısız, başarı yüzdesi ve platform kırılımı. **Yalnızca `STATS_OWNER_ID`** kullanabilir.
   - Aralık: `!stats 24s`, `!stats 7g`, `!stats 30g` (en fazla 30 gün; `s` = saat, `g` = gün).
   - Platform detayı: `!stats instagram`, `!stats 7g instagram` veya `!platform instagram 30g` → o platformun toplam/başarı oranı, dosya-boyut, ortalama süre, kullanıcı/sunucu sayısı ve en çok kullananlar.
+  - Filtre: `!log platform:instagram sonuc:basarili`, `!stats 7g platform:x sonuc:basarisiz` gibi filtrelerle son kayıtlar listelenebilir.
 - `!info` / `!profil` / `!me` → kendi işlem özetiniz (`!info 7g` ile aralık). `!info @kullanıcı` veya `!info <kullanıcı_id>` ile başka kullanıcı sorgusu **yalnızca `STATS_OWNER_ID`** için açıktır.
 - `!metrics` / `!durum` → sağlayıcı, highlight bucket, kart önbelleği, iş kuyruğu, disk ve toplam kota özeti.
 - `!bakim` → bakım modu durumu; `!bakim ac` / `!bakim kapat` ile aç/kapat. **Yalnızca `STATS_OWNER_ID`**. Bakım açıkken sahip dışındaki kullanıcıların yeni indirmeleri engellenir (panelde “Bakım: Açık” görünür).

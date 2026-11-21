@@ -48,6 +48,9 @@ _COMMAND_TRANSLATIONS = {
     "Botun bu sunucudaki dili": "Bot language in this server",
     "Kullanıcı (boş = kendin; başkası için sahip)": "User (empty = yourself; owner for others)",
     "Silmeyi onayla": "Confirm deletion",
+    "Açılıp kapatılacak platform (örn. instagram)": "Platform to enable/disable (e.g. instagram)",
+    "Seçili platform bu sunucuda açık mı?": "Whether the selected platform is enabled in this server",
+    "başarılı, başarısız, bekleyen, atlanan": "success, failure, pending, skipped",
     # Choice names
     "Her zaman sor": "Always ask",
     "MP3 (ses)": "MP3 (audio)",
@@ -99,11 +102,15 @@ def register_commands(bot) -> None:
     @discord.app_commands.describe(
         aralik=loc("24s, 7g veya 30g"),
         platform=loc("instagram, youtube, tiktok…"),
+        sonuc=loc("başarılı, başarısız, bekleyen, atlanan"),
     )
-    async def stats(interaction: discord.Interaction, aralik: str = "", platform: str = "") -> None:
+    async def stats(interaction: discord.Interaction, aralik: str = "", platform: str = "", sonuc: str = "") -> None:
         if not await bot._owner_command(interaction):
             return
-        await run_existing(interaction, bot._reply_request_stats, f"{aralik} {platform}".strip())
+        filt = f"{aralik} {platform}".strip()
+        if sonuc:
+            filt = f"{filt} sonuc:{sonuc}".strip()
+        await run_existing(interaction, bot._reply_request_stats, filt)
 
     @tree.command(name=loc("info"), description=loc("Kendi işlem özetin"))
     @discord.app_commands.describe(
@@ -191,6 +198,8 @@ def register_commands(bot) -> None:
         youtube=loc("YouTube varsayılan kalite"),
         yanitla=loc("Bot yanıtları mesaja reply olarak gönderilsin mi?"),
         dil=loc("Botun bu sunucudaki dili"),
+        platform=loc("Açılıp kapatılacak platform (örn. instagram)"),
+        platform_acik=loc("Seçili platform bu sunucuda açık mı?"),
     )
     @discord.app_commands.choices(youtube=[
         discord.app_commands.Choice(name=loc("Her zaman sor"), value="sor"),
@@ -207,7 +216,9 @@ def register_commands(bot) -> None:
                    otomatik_thread: bool | None = None,
                    youtube: discord.app_commands.Choice[str] | None = None,
                    yanitla: bool | None = None,
-                   dil: discord.app_commands.Choice[str] | None = None) -> None:
+                   dil: discord.app_commands.Choice[str] | None = None,
+                   platform: str | None = None,
+                   platform_acik: bool | None = None) -> None:
         locale = i18n.locale_code(interaction)
         guild = interaction.guild
         if guild is None:
@@ -218,8 +229,19 @@ def register_commands(bot) -> None:
             await interaction.response.send_message(i18n.t("manage_guild_required", locale), ephemeral=True)
             return
         changed = (otomatik_thread is not None or youtube is not None
-                   or yanitla is not None or dil is not None)
+                   or yanitla is not None or dil is not None
+                   or (platform is not None and platform_acik is not None))
         try:
+            disabled_platforms = None
+            if platform is not None and platform_acik is not None:
+                current = SETTINGS.get(guild.id)
+                disabled = set(current.disabled_platforms)
+                key = platform.strip().lower()
+                if platform_acik:
+                    disabled.discard(key)
+                else:
+                    disabled.add(key)
+                disabled_platforms = tuple(sorted(disabled))
             if changed:
                 settings = SETTINGS.update(
                     guild.id,
@@ -227,11 +249,12 @@ def register_commands(bot) -> None:
                     youtube_quality=youtube.value if youtube else None,
                     reply_messages=yanitla,
                     locale=dil.value if dil else None,
+                    disabled_platforms=disabled_platforms,
                 )
             else:
                 settings = SETTINGS.get(guild.id)
-        except ValueError:
-            await interaction.response.send_message(i18n.t("invalid_quality", locale), ephemeral=True)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc)[:300], ephemeral=True)
             return
         shown_locale = settings.locale if settings.locale in {"tr", "en"} else locale
         await interaction.response.send_message(

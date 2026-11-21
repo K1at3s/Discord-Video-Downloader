@@ -187,6 +187,13 @@ Aşağıdaki maddeler tamamlandı; her biri testlerle doğrulandı
   `DB_VACUUM_HOURS` ile periyodik SQLite `integrity_check`/`VACUUM` bakımı
   çalışır; `GUILD_HOURLY_LIMIT`/`GUILD_DAILY_LIMIT` ile sunucu bazlı kota
   uygulanır.
+- [x] **Ürün/UX** — Hata mesajları `denenen sağlayıcılar` detayını korur;
+  sunucu bazlı platform aç/kapat (`!ayar platform <ad> ac|kapat`, `/ayar`)
+  eklendi; `!log/!stats` için `platform:` ve `sonuc:` filtreleri desteklenir.
+- [x] **Güvenilirlik** — `scripts/restore_backup.ps1` ve README geri yükleme
+  adımları eklendi; bozuk SQLite `integrity_check` sonrası bakım modu açılır ve
+  sahibine uyarı gider; `BACKUP_MAX_AGE_DAYS` ve eski temp indirme klasörü
+  temizliğiyle disk temizliği politikası uygulandı.
 
 ## Sıradaki paketler
 

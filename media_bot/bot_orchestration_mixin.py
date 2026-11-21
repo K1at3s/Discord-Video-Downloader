@@ -137,6 +137,25 @@ class OrchestrationMixin:
                     pending_target = None
                     precomputed_bytes: int | None = None
                     started = time.monotonic()
+                    guild_settings = SETTINGS.get(getattr(message.guild, "id", 0))
+                    if not guild_settings.platform_enabled(link.platform):
+                        await self._reply(
+                            message,
+                            i18n.t("platform_disabled", locale, platform=link.platform.upper()),
+                        )
+                        REQUESTS.record(
+                            guild_id=getattr(message.guild, "id", None),
+                            guild_name=getattr(message.guild, "name", None),
+                            channel_id=getattr(message.channel, "id", None),
+                            user_id=getattr(message.author, "id", None),
+                            user_name=str(getattr(message.author, "name", message.author)),
+                            platform=link.platform,
+                            url=link.url,
+                            outcome="skipped",
+                            detail="platform_disabled",
+                            elapsed_ms=int((time.monotonic() - started) * 1000),
+                        )
+                        return
                     quota = getattr(self, "user_quota", None)
                     if quota is not None and message.author.id != owner_id:
                         try:

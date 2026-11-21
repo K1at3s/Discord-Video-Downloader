@@ -42,11 +42,33 @@ def classify(detail: str | None) -> str:
     return "error_generic"
 
 
+def _detail_suffix(detail: str | None) -> str:
+    text = (detail or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    idx = lower.find("denenen:")
+    if idx != -1:
+        tried = text[idx + len("denenen:"):].strip(" .)")
+        tried = tried[:180]
+        return f"\n-# Denenen sağlayıcılar: {tried}" if tried else ""
+    # Keep short useful context for generic failures without dumping raw traces.
+    if len(text) <= 180 and "\n" not in text and "traceback" not in lower:
+        return f"\n-# {text}"
+    return ""
+
+
 def user_message(detail: str | None, locale: str = "tr", *, platform: str = "") -> str:
     key = classify(detail)
     if key == "error_no_media":
         if not platform:
             key = "error_not_found"
+            base = i18n.t(key, locale)
         else:
-            return i18n.t(key, locale, platform=platform)
-    return i18n.t(key, locale)
+            base = i18n.t(key, locale, platform=platform)
+    else:
+        base = i18n.t(key, locale)
+    suffix = _detail_suffix(detail)
+    if suffix and suffix.strip().lower() not in base.lower():
+        return base + suffix
+    return base

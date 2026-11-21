@@ -124,6 +124,17 @@ def resolve_platform(value: str) -> str | None:
     return None
 
 
+def resolve_outcome(value: str) -> str | None:
+    raw = (value or "").strip().lower()
+    aliases = {
+        "success": "success", "basarili": "success", "başarılı": "success", "ok": "success",
+        "failure": "failure", "basarisiz": "failure", "başarısız": "failure", "hata": "failure", "fail": "failure",
+        "pending": "pending", "bekleyen": "pending", "beklemede": "pending",
+        "skipped": "skipped", "atlanan": "skipped", "atlanmis": "skipped", "atlandı": "skipped",
+    }
+    return aliases.get(raw)
+
+
 class RequestLog:
     def __init__(self, path: Path | None = None, *, initialize: bool = True):
         self.path: Path | None = None
@@ -535,6 +546,31 @@ class RequestLog:
                 lines.append(f"   ↳ {row['detail'][:140]}")
             if row["url"]:
                 lines.append(f"   {row['url'][:100]}")
+        return "\n".join(lines)
+
+    def format_filtered(self, hours: int = 24, *, platform: str | None = None,
+                        outcome: str | None = None, user_id: int | None = None,
+                        limit: int = 10) -> str:
+        rows = self.recent(hours, limit, outcome=outcome, platform=platform, user_id=user_id)
+        filters = []
+        if platform:
+            filters.append(f"platform={PLATFORM_LABELS.get(platform, platform)}")
+        if outcome:
+            filters.append(f"sonuc={outcome}")
+        if user_id is not None:
+            filters.append(f"user={user_id}")
+        label = ", ".join(filters) if filters else "filtre yok"
+        header = f"📋 İşlem kayıtları · {range_label(hours)} · {label}"
+        if not rows:
+            return f"{header}\nSeçilen filtrelere uygun kayıt yok."
+        lines = [header]
+        for row in rows:
+            lines.append(
+                f"• {_human_date(row['at'])} · **{PLATFORM_LABELS.get(row['platform'], row['platform'])}** "
+                f"· {row['outcome']} · {row['user']}"
+            )
+            if row["detail"]:
+                lines.append(f"   ↳ {row['detail'][:120]}")
         return "\n".join(lines)
 
     def _format_platforms(self, rows: dict[str, dict], limit: int = 12) -> list[str]:

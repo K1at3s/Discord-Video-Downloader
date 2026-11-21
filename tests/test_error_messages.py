@@ -28,3 +28,8 @@ class ErrorMessageTests(unittest.TestCase):
     def test_platform_is_injected_for_missing_media(self):
         text = user_message("no media", "en", platform="TIKTOK")
         self.assertIn("TIKTOK", text)
+
+    def test_tried_providers_are_preserved(self):
+        text = user_message("Bu gönderiden medya alınamadı (denenen: yt-dlp, cobalt)", "tr")
+        self.assertIn("Denenen sağlayıcılar", text)
+        self.assertIn("yt-dlp", text)

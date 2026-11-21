@@ -16,7 +16,7 @@ LOG = logging.getLogger(__name__)
 
 
 def backup_databases(paths: Sequence[Path], root: Path, keep: int = 7,
-                     *, now: float | None = None) -> Path | None:
+                     *, now: float | None = None, max_age_days: int = 0) -> Path | None:
     """Copy every existing database into one timestamped folder.
 
     ``sqlite3.Connection.backup`` is used instead of ``shutil.copy`` so a write
@@ -50,7 +50,7 @@ def backup_databases(paths: Sequence[Path], root: Path, keep: int = 7,
         shutil.rmtree(folder, ignore_errors=True)
         return None
     LOG.info("Veritabanı yedeği: %s (%d dosya)", folder, copied)
-    prune_backups(root, keep)
+    prune_backups(root, keep, max_age_days=max_age_days)
     return folder
 
 
@@ -66,10 +66,11 @@ def latest_backup(root: Path) -> Path | None:
     return max(folders, key=lambda item: item.name, default=None)
 
 
-def prune_backups(root: Path, keep: int = 7) -> list[Path]:
-    """Delete the oldest timestamped backup folders, keeping ``keep`` of them."""
+def prune_backups(root: Path, keep: int = 7, *, max_age_days: int = 0,
+                   now: float | None = None) -> list[Path]:
+    """Delete old timestamped backup folders by count and optional age."""
     root = Path(root)
-    if keep < 1 or not root.is_dir():
+    if not root.is_dir():
         return []
     folders = sorted(
         (child for child in root.iterdir()
@@ -77,9 +78,20 @@ def prune_backups(root: Path, keep: int = 7) -> list[Path]:
         key=lambda child: child.name,
     )
     removed: list[Path] = []
-    for folder in folders[:-keep]:
-        shutil.rmtree(folder, ignore_errors=True)
-        removed.append(folder)
+    if keep >= 1 and len(folders) > keep:
+        for folder in folders[:-keep]:
+            shutil.rmtree(folder, ignore_errors=True)
+            removed.append(folder)
+            folders = [f for f in folders if f != folder]
+    if max_age_days > 0:
+        cutoff = (time.time() if now is None else now) - max_age_days * 86400
+        for folder in folders:
+            try:
+                if folder.stat().st_mtime < cutoff:
+                    shutil.rmtree(folder, ignore_errors=True)
+                    removed.append(folder)
+            except OSError:
+                continue
     return removed
 
 
@@ -89,6 +101,27 @@ def database_paths(database_path: Path) -> list[Path]:
     names = {Path(database_path).name, "provider_metrics.sqlite3",
              "request_log.sqlite3", "guild_settings.sqlite3"}
     return [root / name for name in sorted(names)]
+
+
+def cleanup_stale_temp_dirs(prefix: str = "discord-media-", max_age_hours: int = 24) -> int:
+    """Remove stale temp download directories left behind by crashes."""
+    import tempfile
+
+    root = Path(tempfile.gettempdir())
+    cutoff = time.time() - max(1, max_age_hours) * 3600
+    removed = 0
+    for child in root.glob(f"{prefix}*"):
+        if not child.is_dir():
+            continue
+        try:
+            if child.stat().st_mtime < cutoff:
+                shutil.rmtree(child, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        LOG.info("Stale temp dirs cleaned: %d", removed)
+    return removed
 
 
 def backup_enabled(default: bool = True) -> bool:

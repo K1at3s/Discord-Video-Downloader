@@ -113,8 +113,24 @@ _STRINGS: dict[str, dict[str, str]] = {
     "on": {"tr": "açık", "en": "on"},
     "off": {"tr": "kapalı", "en": "off"},
     "settings_hint": {
-        "tr": "İpucu: `/ayar` içinde `otomatik_thread`, `youtube` veya `yanitla` seçeneğini vererek ayarı değiştirebilirsin.",
-        "en": "Tip: provide `otomatik_thread`, `youtube`, or `yanitla` in `/ayar` to change a setting.",
+        "tr": "İpucu: `/ayar` içinde `otomatik_thread`, `youtube`, `yanitla` veya `platform` seçeneğini vererek ayarı değiştirebilirsin.",
+        "en": "Tip: provide `otomatik_thread`, `youtube`, `yanitla`, or `platform` in `/ayar` to change a setting.",
+    },
+    "disabled_platforms": {
+        "tr": "Kapalı platformlar",
+        "en": "Disabled platforms",
+    },
+    "disabled_platforms_desc": {
+        "tr": "Kapatılan platform bağlantıları bu sunucuda işlenmez.",
+        "en": "Links from disabled platforms are ignored in this server.",
+    },
+    "platform_disabled": {
+        "tr": "Bu sunucuda **{platform}** bağlantıları kapalı.",
+        "en": "**{platform}** links are disabled in this server.",
+    },
+    "none": {
+        "tr": "yok",
+        "en": "none",
     },
     "invalid_quality": {
         "tr": "Geçersiz YouTube kalite seçimi.",
@@ -130,9 +146,11 @@ _STRINGS: dict[str, dict[str, str]] = {
     "locale_en": {"tr": "İngilizce", "en": "English"},
     "settings_usage": {
         "tr": "Kullanım: `!ayar` · `!ayar thread ac|kapat` · `!ayar yanit ac|kapat` · "
-              "`!ayar youtube sor|mp3|360|720|1080` · `!ayar dil tr|en|auto` · `!ayar sifirla`",
+              "`!ayar youtube sor|mp3|360|720|1080` · `!ayar dil tr|en|auto` · "
+              "`!ayar platform instagram ac|kapat` · `!ayar sifirla`",
         "en": "Usage: `!ayar` · `!ayar thread on|off` · `!ayar reply on|off` · "
-              "`!ayar youtube ask|mp3|360|720|1080` · `!ayar lang tr|en|auto` · `!ayar reset`",
+              "`!ayar youtube ask|mp3|360|720|1080` · `!ayar lang tr|en|auto` · "
+              "`!ayar platform instagram on|off` · `!ayar reset`",
     },
     "queued": {
         "tr": "⏳ Sıradasın; bağlantın işlenecek.",
@@ -372,6 +390,8 @@ def describe_settings(settings: GuildSettings, locale: str) -> str:
     reply = t("on", locale) if getattr(settings, "reply_messages", True) else t("off", locale)
     configured = getattr(settings, "locale", "tr")
     language = t(f"locale_{configured}", locale) if configured in {"auto", "tr", "en"} else t("locale_tr", locale)
+    disabled = getattr(settings, "disabled_platforms", ())
+    disabled_text = ", ".join(disabled) if disabled else t("none", locale)
     return (
         f"**{t('auto_thread', locale)}:** {thread}\n"
         f"-# {t('auto_thread_desc', locale)}\n\n"
@@ -379,7 +399,9 @@ def describe_settings(settings: GuildSettings, locale: str) -> str:
         f"-# {t('youtube_default_desc', locale)}\n\n"
         f"**{t('reply_messages', locale)}:** {reply}\n"
         f"-# {t('reply_messages_desc', locale)}\n\n"
-        f"**{t('language', locale)}:** {language}"
+        f"**{t('language', locale)}:** {language}\n\n"
+        f"**{t('disabled_platforms', locale)}:** {disabled_text}\n"
+        f"-# {t('disabled_platforms_desc', locale)}"
     )
 
 

@@ -15,7 +15,10 @@ LOG = logging.getLogger(__name__)
 
 QUALITY_CHOICES = ("sor", "mp3", "360", "720", "1080")
 LOCALE_CHOICES = ("auto", "tr", "en")
-DEFAULTS = {"auto_thread": False, "youtube_quality": "sor", "locale": "tr"}
+PLATFORM_CHOICES = (
+    "instagram", "tiktok", "facebook", "reddit", "spotify", "youtube",
+    "x", "threads", "douyin", "weibo", "streamable", "bluesky",
+)
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,10 @@ class GuildSettings:
     youtube_quality: str = "sor"
     reply_messages: bool = True
     locale: str = "tr"
+    disabled_platforms: tuple[str, ...] = ()
+
+    def platform_enabled(self, platform: str) -> bool:
+        return (platform or "").lower() not in self.disabled_platforms
 
 
 class GuildSettingsStore:
@@ -49,6 +56,7 @@ class GuildSettingsStore:
                 "youtube_quality TEXT NOT NULL DEFAULT 'sor', "
                 "reply_messages INTEGER NOT NULL DEFAULT 1, "
                 "locale TEXT NOT NULL DEFAULT 'tr', "
+                "disabled_platforms TEXT NOT NULL DEFAULT '', "
                 "updated_at INTEGER NOT NULL DEFAULT 0)"
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(guild_settings)")}
@@ -56,6 +64,8 @@ class GuildSettingsStore:
                 db.execute("ALTER TABLE guild_settings ADD COLUMN reply_messages INTEGER NOT NULL DEFAULT 1")
             if "locale" not in columns:
                 db.execute("ALTER TABLE guild_settings ADD COLUMN locale TEXT NOT NULL DEFAULT 'tr'")
+            if "disabled_platforms" not in columns:
+                db.execute("ALTER TABLE guild_settings ADD COLUMN disabled_platforms TEXT NOT NULL DEFAULT ''")
 
     def get(self, guild_id: int) -> GuildSettings:
         if self.path is None or not guild_id:
@@ -63,7 +73,7 @@ class GuildSettingsStore:
         try:
             with self._lock, closing(open_db(self.path)) as db:
                 row = db.execute(
-                    "SELECT auto_thread, youtube_quality, reply_messages, locale "
+                    "SELECT auto_thread, youtube_quality, reply_messages, locale, disabled_platforms "
                     "FROM guild_settings WHERE guild_id = ?",
                     (guild_id,),
                 ).fetchone()
@@ -75,8 +85,11 @@ class GuildSettingsStore:
         quality = row[1] if row[1] in QUALITY_CHOICES else "sor"
         reply_messages = True if row[2] is None else bool(row[2])
         locale = row[3] if row[3] in LOCALE_CHOICES else "tr"
+        raw_disabled = str(row[4] or "")
+        disabled = tuple(p for p in (part.strip().lower() for part in raw_disabled.split(",")) if p in PLATFORM_CHOICES)
         return GuildSettings(auto_thread=bool(row[0]), youtube_quality=quality,
-                             reply_messages=reply_messages, locale=locale)
+                             reply_messages=reply_messages, locale=locale,
+                             disabled_platforms=disabled)
 
     def update(self, guild_id: int, **fields) -> GuildSettings:
         """Validate and persist a partial change, returning the new settings."""
@@ -96,6 +109,17 @@ class GuildSettingsStore:
             if locale not in LOCALE_CHOICES:
                 raise ValueError(f"Geçersiz dil: {locale}")
             changes["locale"] = locale
+        if "disabled_platforms" in fields and fields["disabled_platforms"] is not None:
+            raw = fields["disabled_platforms"]
+            if isinstance(raw, str):
+                items = [part.strip().lower() for part in raw.split(",")]
+            else:
+                items = [str(part).strip().lower() for part in raw]
+            disabled = tuple(sorted({p for p in items if p}))
+            invalid = [p for p in disabled if p not in PLATFORM_CHOICES]
+            if invalid:
+                raise ValueError(f"Geçersiz platform: {', '.join(invalid)}")
+            changes["disabled_platforms"] = disabled
         if not changes:
             return current
         updated = replace(current, **changes)
@@ -103,15 +127,17 @@ class GuildSettingsStore:
             try:
                 with self._lock, closing(open_db(self.path)) as db, db:
                     db.execute(
-                        "INSERT INTO guild_settings (guild_id, auto_thread, youtube_quality, reply_messages, locale, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
+                        "INSERT INTO guild_settings (guild_id, auto_thread, youtube_quality, reply_messages, locale, disabled_platforms, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
                         "auto_thread = excluded.auto_thread, "
                         "youtube_quality = excluded.youtube_quality, "
                         "reply_messages = excluded.reply_messages, "
                         "locale = excluded.locale, "
+                        "disabled_platforms = excluded.disabled_platforms, "
                         "updated_at = excluded.updated_at",
                         (guild_id, int(updated.auto_thread), updated.youtube_quality,
-                         int(updated.reply_messages), updated.locale, int(time.time())),
+                         int(updated.reply_messages), updated.locale,
+                         ",".join(updated.disabled_platforms), int(time.time())),
                     )
             except Exception as exc:
                 LOG.warning("Sunucu ayarları yazılamadı: %s", exc)
@@ -125,6 +151,8 @@ SETTINGS = GuildSettingsStore()
 def describe(settings: GuildSettings) -> str:
     thread = "açık" if settings.auto_thread else "kapalı"
     reply = "açık" if settings.reply_messages else "kapalı"
+    disabled = ", ".join(settings.disabled_platforms) if settings.disabled_platforms else "yok"
     return (f"🧵 Otomatik thread: **{thread}**\n"
             f"🎬 YouTube varsayılanı: **{settings.youtube_quality}**\n"
-            f"↩️ Mesaja yanıt (reply): **{reply}**")
+            f"↩️ Mesaja yanıt (reply): **{reply}**\n"
+            f"🚫 Kapalı platformlar: **{disabled}**")

@@ -16,7 +16,7 @@ from .highlight_state import HIGHLIGHTS, format_wait
 from .maintenance import MAINTENANCE
 from .media_cache import MEDIA_CACHE
 from .provider_metrics import METRICS
-from .request_log import REQUESTS, _human_bytes, parse_range, resolve_platform
+from .request_log import REQUESTS, _human_bytes, parse_range, resolve_outcome, resolve_platform
 
 LOG = logging.getLogger("media_bot.bot")
 
@@ -110,22 +110,54 @@ class AdminCommandsMixin:
     async def _reply_request_stats(self, message: discord.Message, argument: str = "") -> None:
         hours = 24
         platform: str | None = None
+        outcome: str | None = None
+        user_id: int | None = None
         for token in argument.split():
-            parsed = parse_range(token)
+            raw = token.strip()
+            lower = raw.lower()
+            if ":" in lower:
+                key, value = lower.split(":", 1)
+                if key in {"platform", "p"}:
+                    resolved = resolve_platform(value)
+                    if not resolved:
+                        await self._reply(message, f"Bilinmeyen platform: `{value}`")
+                        return
+                    platform = resolved
+                    continue
+                if key in {"sonuc", "sonuç", "outcome", "durum", "status"}:
+                    resolved = resolve_outcome(value)
+                    if not resolved:
+                        await self._reply(message, f"Bilinmeyen sonuç: `{value}` (başarılı/başarısız/bekleyen/atlanan)")
+                        return
+                    outcome = resolved
+                    continue
+                if key in {"user", "kullanici", "kullanıcı", "uid"}:
+                    if value.isdigit():
+                        user_id = int(value)
+                        continue
+                    await self._reply(message, f"Geçersiz kullanıcı ID: `{value}`")
+                    return
+            parsed = parse_range(raw)
             if parsed is not None:
                 hours = parsed
                 continue
-            key = resolve_platform(token)
-            if key:
-                platform = key
+            resolved_platform = resolve_platform(raw)
+            if resolved_platform:
+                platform = resolved_platform
+                continue
+            resolved_outcome = resolve_outcome(raw)
+            if resolved_outcome and outcome is None:
+                outcome = resolved_outcome
                 continue
             await self._reply(
                 message,
                 f"Bilinmeyen argüman: `{token}`\n"
-                "Kullanım: `!stats` · `!stats 7g` · `!stats 30g` · `!stats 7g instagram`",
+                "Kullanım: `!stats` · `!stats 7g` · `!stats 7g instagram` · `!log platform:x sonuc:basarili`",
             )
             return
-        if platform:
+        if outcome is not None or user_id is not None:
+            text = REQUESTS.format_filtered(hours, platform=platform, outcome=outcome, user_id=user_id)
+        elif platform:
             text = REQUESTS.format_platform(platform, hours)
         else:
             role = "Yönetici" if _is_admin(message) else "Kullanıcı"
@@ -220,15 +252,32 @@ class AdminCommandsMixin:
                 index += 2
             elif token in {"sifirla", "sıfırla", "reset"}:
                 changes.update(auto_thread=False, youtube_quality="sor",
-                               reply_messages=True, locale="tr")
+                               reply_messages=True, locale="tr", disabled_platforms=())
                 index += 1
+            elif token in {"platform", "platformlar"}:
+                if index + 2 >= len(tokens):
+                    await self._reply(message, usage)
+                    return
+                platform = tokens[index + 1].lower()
+                value = tokens[index + 2].lower()
+                current = SETTINGS.get(guild.id)
+                disabled = set(current.disabled_platforms)
+                if value in {"ac", "aç", "on", "1", "evet", "enable", "enabled"}:
+                    disabled.discard(platform)
+                elif value in {"kapat", "off", "0", "hayir", "hayır", "disable", "disabled"}:
+                    disabled.add(platform)
+                else:
+                    await self._reply(message, usage)
+                    return
+                changes["disabled_platforms"] = tuple(sorted(disabled))
+                index += 3
             else:
                 await self._reply(message, usage)
                 return
         try:
             settings = SETTINGS.update(guild.id, **changes)
         except ValueError as exc:
-            await self._reply(message, f"{exc}\nKalite: `sor`, `mp3`, `360`, `720`, `1080`")
+            await self._reply(message, f"{exc}\n{usage}")
             return
         shown_locale = settings.locale if settings.locale in {"tr", "en"} else locale
         await self._reply(message, i18n.settings_message(settings, shown_locale, updated=bool(changes)))
