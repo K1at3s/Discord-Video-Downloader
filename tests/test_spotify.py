@@ -1,10 +1,15 @@
+import asyncio
+import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import httpx
 
 from media_bot.bot import MediaBot
+from media_bot.download import DownloadError
 from media_bot.links import PostLink
-from media_bot.spotify import SpotifyTrack, choose_match, parse_track_page
+from media_bot.spotify import SpotifyTrack, choose_match, fetch_track, find_audio_source, parse_track_page
 
 
 class SpotifyTests(unittest.TestCase):
@@ -53,6 +58,93 @@ class SpotifyFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0][0], "")
         self.assertEqual(sent[0][1], ["FLEX.mp3"])
         self.assertIsNone(sent[0][2])
+
+
+class SpotifyExtraTests(unittest.IsolatedAsyncioTestCase):
+    def test_parse_track_page_ignores_bad_meta_and_rejects_missing(self):
+        page = '<div>ignore</div><meta property="og:title"/><meta name="music:duration" content="abc"/>'
+        self.assertIsNone(parse_track_page(page))
+        long_page = ('<meta property="og:title" content="' + 'A' * 201 + '"/>'
+                     '<meta name="music:musician_description" content="Artist"/>')
+        self.assertIsNone(parse_track_page(long_page))
+
+    async def test_fetch_track_rejects_non_track_url(self):
+        link = PostLink("spotify", "https://open.spotify.com/album/abc")
+        with self.assertRaises(DownloadError):
+            await fetch_track(link)
+
+    async def test_fetch_track_http_error_and_missing_track(self):
+        link = PostLink("spotify", "https://open.spotify.com/track/abc123")
+
+        class FakeClient:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_args): return False
+            async def get(self, _url):
+                raise httpx.HTTPError("boom")
+
+        with patch("media_bot.spotify.shared_client", return_value=FakeClient()):
+            with self.assertRaises(DownloadError):
+                await fetch_track(link)
+
+        class OkClient(FakeClient):
+            async def get(self, _url):
+                return SimpleNamespace(text="<html></html>", raise_for_status=lambda: None)
+
+        with patch("media_bot.spotify.shared_client", return_value=OkClient()):
+            with self.assertRaises(DownloadError):
+                await fetch_track(link)
+
+    def test_choose_match_filters_and_scores(self):
+        track = SpotifyTrack("FLEX", "Khontkar, Tuby, Motive", 196)
+        entries = [
+            "bad",
+            {"id": "badid", "title": "Khontkar FLEX", "duration": 196, "channel": "Khontkar"},
+            {"id": "aaaaaaaaaaa", "title": "Wrong title", "duration": 196, "channel": "Khontkar"},
+            {"id": "bbbbbbbbbbb", "title": "Khontkar FLEX", "duration": 10, "channel": "Khontkar"},
+            {"id": "ccccccccccc", "title": "Khontkar FLEX", "duration": 250, "channel": "Khontkar"},
+            {"id": "ddddddddddd", "title": "Khontkar FLEX", "duration": 196, "channel": "Random"},
+            {"id": "eeeeeeeeeee", "title": "Khontkar FLEX official", "duration": 196,
+             "channel": "Topic", "channel_is_verified": True},
+        ]
+        self.assertEqual(choose_match(entries, track), "eeeeeeeeeee")
+        self.assertIsNone(choose_match([], SpotifyTrack("X", "Y", 100)))
+
+    async def test_find_audio_source_success_timeout_and_bad_json(self):
+        track = SpotifyTrack("FLEX", "Khontkar, Tuby, Motive", 196)
+
+        async def make_proc(stdout=b"", raise_timeout=False, raise_cancel=False):
+            proc = AsyncMock()
+            calls = {"n": 0}
+
+            async def communicate():
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    if raise_cancel:
+                        raise asyncio.CancelledError()
+                    if raise_timeout:
+                        raise TimeoutError()
+                return stdout, b""
+
+            proc.communicate.side_effect = communicate
+            proc.kill = Mock()
+            return proc
+
+        good_payload = json.dumps({"entries": [{"id": "Go8Uobt-EVg", "title": "Khontkar FLEX Motive", "duration": 196, "channel": "Khontkar"}]}).encode()
+        with patch("media_bot.spotify.asyncio.create_subprocess_exec", AsyncMock(return_value=await make_proc(good_payload))):
+            link = await find_audio_source(track)
+        self.assertEqual(link.post_id, "Go8Uobt-EVg")
+
+        with patch("media_bot.spotify.asyncio.create_subprocess_exec", AsyncMock(return_value=await make_proc(b"not-json"))):
+            with self.assertRaises(DownloadError):
+                await find_audio_source(track)
+
+        with patch("media_bot.spotify.asyncio.create_subprocess_exec", AsyncMock(return_value=await make_proc(raise_timeout=True))):
+            with self.assertRaises(DownloadError):
+                await find_audio_source(track)
+
+        with patch("media_bot.spotify.asyncio.create_subprocess_exec", AsyncMock(return_value=await make_proc(raise_cancel=True))):
+            with self.assertRaises(asyncio.CancelledError):
+                await find_audio_source(track)
 
 
 if __name__ == "__main__":

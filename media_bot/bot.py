@@ -133,6 +133,8 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
         self._cookie_checked = False
         self._disk_warned_at = 0.0
         self._last_vacuum_at = 0.0
+        self._last_db_maintenance_at = 0.0
+        self._last_db_maintenance: dict[str, dict[str, str | bool]] = {}
         try:
             cooldown = float(os.getenv("COMMAND_COOLDOWN_SECONDS", "2") or 2)
         except ValueError:
@@ -232,6 +234,18 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                 backup_info["age_hours"] = round((time.time() - backup.stat().st_mtime) / 3600, 1)
             except OSError:
                 pass
+        db_maintenance = {
+            "last_check_at": int(self._last_db_maintenance_at) if self._last_db_maintenance_at else None,
+            "last_vacuum_at": int(self._last_vacuum_at) if self._last_vacuum_at else None,
+            "ok": all(info.get("integrity_ok", True) for info in self._last_db_maintenance.values()) if self._last_db_maintenance else None,
+            "databases": {
+                Path(path).name: {
+                    "integrity_ok": bool(info.get("integrity_ok", False)),
+                    "vacuumed": bool(info.get("vacuumed", False)),
+                }
+                for path, info in self._last_db_maintenance.items()
+            },
+        }
         return {
             "status": "ok" if ready else "starting",
             "uptime_seconds": int(time.time() - self.started_at),
@@ -246,6 +260,7 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
             },
             "disk": disk_status(self.database_path.parent),
             "backup": backup_info,
+            "db_maintenance": db_maintenance,
             "providers": breakers,
             "cobalt": bool(self.cobalt_url),
             "maintenance": MAINTENANCE.active,
@@ -333,6 +348,16 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                   "Configured guild hourly quota limit.")
             gauge("discord_video_bot_guild_quota_daily_limit", summary.get("daily_limit", 0),
                   "Configured guild daily quota limit.")
+        dbm = payload.get("db_maintenance") or {}
+        if dbm.get("last_check_at") is not None:
+            gauge("discord_video_bot_db_maintenance_last_check_timestamp", dbm["last_check_at"],
+                  "Unix timestamp of last DB maintenance check.")
+        if dbm.get("last_vacuum_at") is not None:
+            gauge("discord_video_bot_db_maintenance_last_vacuum_timestamp", dbm["last_vacuum_at"],
+                  "Unix timestamp of last DB vacuum.")
+        if dbm.get("ok") is not None:
+            gauge("discord_video_bot_db_integrity_ok", 1 if dbm["ok"] else 0,
+                  "Whether all SQLite integrity checks passed.")
         lines.append("")
         return "\n".join(lines)
 
@@ -365,6 +390,8 @@ class MediaBot(AdminCommandsMixin, LinkHandlersMixin, OrchestrationMixin, discor
                 vacuum_due = bool(vacuum_hours) and (now - self._last_vacuum_at >= vacuum_hours * 3600)
                 from .sqlite_util import maintain_databases
                 results = await asyncio.to_thread(maintain_databases, paths, vacuum_enabled=vacuum_due)
+                self._last_db_maintenance = results
+                self._last_db_maintenance_at = now
                 if vacuum_due and any(info.get("vacuumed") for info in results.values()):
                     self._last_vacuum_at = now
                 for db_path, info in results.items():
