@@ -1,7 +1,8 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from media_bot.download import (
     DownloadError,
@@ -59,3 +60,54 @@ class DownloadMediaBranchTests(unittest.IsolatedAsyncioTestCase):
         with patch("media_bot.download.ensure_free_disk", side_effect=__import__("media_bot.disk", fromlist=["LowDiskError"]).LowDiskError("disk")):
             with self.assertRaises(DownloadError):
                 await download_media(link, tmp, 1000)
+
+class ExecuteProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_execute_provider_dispatch(self):
+        from media_bot.download import _execute_provider
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = Path(tempfile.mkdtemp(prefix="ep-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+
+        with patch("media_bot.download._yt_dlp", AsyncMock(return_value=(0, ""))):
+            self.assertEqual(await _execute_provider("yt-dlp", link, tmp, 100, None, None, None, None), (0, ""))
+        with patch("media_bot.download._gallery_dl", AsyncMock(return_value=(0, ""))):
+            self.assertEqual(await _execute_provider("gallery-dl", link, tmp, 100, None, None, None, None), (0, ""))
+        with patch("media_bot.download._instaloader", AsyncMock(return_value=(0, ""))):
+            self.assertEqual(await _execute_provider("instaloader", link, tmp, 100, None, None, None, None), (0, ""))
+        with patch("media_bot.download._you_get", AsyncMock(return_value=(0, ""))):
+            self.assertEqual(await _execute_provider("you-get", link, tmp, 100, None, None, None, None), (0, ""))
+        with patch("media_bot.download._gallery_rs", AsyncMock(return_value=(0, ""))):
+            self.assertEqual(await _execute_provider("gallery-dl-rs", link, tmp, 100, None, None, None, tmp), (0, ""))
+        with patch("media_bot.download.download_direct", AsyncMock(return_value=(1, "no"))):
+            self.assertEqual(await _execute_provider("direct", link, tmp, 100, None, None, None, None), (0, "no"))
+        with patch("media_bot.download.download_gendownload", AsyncMock(return_value=(2, ""))):
+            self.assertEqual(await _execute_provider("gendownload", link, tmp, 100, None, None, None, None), (0, ""))
+        with patch("media_bot.download.download_vxtwitter", AsyncMock(return_value=(0, "x"))):
+            self.assertEqual(await _execute_provider("vxtwitter", link, tmp, 100, None, None, None, None), (1, "x"))
+        with patch("media_bot.download.download_indownio", AsyncMock(return_value=(1, ""))):
+            self.assertEqual(await _execute_provider("indownio", link, tmp, 100, None, None, None, None), (0, ""))
+        with patch("media_bot.download.download_web", AsyncMock(return_value=(0, "e"))):
+            self.assertEqual(await _execute_provider("indown", link, tmp, 100, None, None, None, None), (1, "e"))
+        with patch("media_bot.download.download_cobalt", AsyncMock(return_value=(1, ""))):
+            self.assertEqual(await _execute_provider("cobalt", link, tmp, 100, None, "http://c", None, None), (0, ""))
+
+        # timeout branches
+        async def slow(*a, **k):
+            await asyncio.sleep(10)
+
+        async def fake_wait_for(coro, *a, **k):
+            coro.close()
+            raise asyncio.TimeoutError
+
+        for name, target_name in [
+            ("direct", "media_bot.download.download_direct"),
+            ("gendownload", "media_bot.download.download_gendownload"),
+            ("vxtwitter", "media_bot.download.download_vxtwitter"),
+            ("indownio", "media_bot.download.download_indownio"),
+            ("indown", "media_bot.download.download_web"),
+            ("cobalt", "media_bot.download.download_cobalt"),
+        ]:
+            args = (link, tmp, 100, None, "http://c", None, None) if name == "cobalt" else (link, tmp, 100, None, None, None, None)
+            with patch(target_name, side_effect=slow), patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for):
+                code, _ = await _execute_provider(name, *args)
+                self.assertEqual(code, -1)
