@@ -1041,3 +1041,124 @@ class DownloadMediaTests(unittest.IsolatedAsyncioTestCase):
             dl.BREAKERS.allow = orig_allow
             for p in patches:
                 p.stop()
+
+    async def test_easy_download_branches(self):
+        from media_bot.download import download_media
+        # 459-460: cooldown opened in generic Exception handler
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=True), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names[:1]))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget") as forget, \
+             patch("media_bot.download._execute_provider", AsyncMock(side_effect=RuntimeError("boom"))), \
+             patch("media_bot.download.media_files", return_value=[]):
+            with self.assertRaises(DownloadError):
+                await download_media(link, tmp, 1000)
+        forget.assert_called()
+
+        # 750: facebook share/p/ canonical tries gallery-dl first
+        link = PostLink("facebook", "https://www.facebook.com/share/p/abc123/", "abc123")
+        canonical = PostLink("facebook", "https://www.facebook.com/reel/123/", "123")
+        tmp = make_tmp(self)
+        prov_dir = tmp / "gallery-dl"
+        prov_dir.mkdir()
+        (prov_dir / "a.mp4").write_bytes(b"v")
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.canonical_facebook_post", AsyncMock(return_value=canonical)), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download._execute_provider", AsyncMock(return_value=(0, ""))), \
+             patch("media_bot.download.media_files", return_value=[prov_dir / "a.mp4"]):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertEqual(provider, "gallery-dl")
+
+        # 757-758: threadsdl timeout falls through
+        link = PostLink("threads", "https://www.threads.com/@u/post/ABC", "ABC")
+        tmp = make_tmp(self)
+        prov_dir = tmp / "yt-dlp"
+        prov_dir.mkdir()
+        (prov_dir / "a.mp4").write_bytes(b"v")
+        real_wait_for = asyncio.wait_for
+
+        async def fake_wait_for(awaitable, timeout=None):
+            if timeout == 12:
+                if asyncio.iscoroutine(awaitable):
+                    awaitable.close()
+                raise asyncio.TimeoutError
+            return await real_wait_for(awaitable, timeout=timeout)
+
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for), \
+             patch("media_bot.download._execute_provider", AsyncMock(return_value=(0, ""))), \
+             patch("media_bot.download.media_files", return_value=[prov_dir / "a.mp4"]):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertTrue(files)
+
+        # 921: no failures generic
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(return_value=[])), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download.media_files", return_value=[]):
+            with self.assertRaises(DownloadError) as ctx:
+                await download_media(link, tmp, 1000)
+        self.assertEqual(str(ctx.exception), "Bu gönderiden medya alınamadı. Gönderi silinmiş/özel olabilir veya sağlayıcılar geçici olarak yanıt vermiyor olabilir.")
