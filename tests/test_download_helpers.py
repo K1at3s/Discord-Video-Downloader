@@ -1,9 +1,7 @@
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from media_bot.download import (
     DownloadError,

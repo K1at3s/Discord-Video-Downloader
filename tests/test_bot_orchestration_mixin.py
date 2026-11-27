@@ -1,4 +1,3 @@
-import asyncio
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,3 +145,77 @@ class OrchestrationMixinTests(unittest.IsolatedAsyncioTestCase):
              patch("media_bot.bot_orchestration_mixin.MAINTENANCE", SimpleNamespace(active=False, message="m")):
             await bot2.on_message(msg2)
         bot2._handle_link.assert_not_awaited()
+
+    async def test_quota_and_failure_paths(self):
+        link = PostLink("x", "https://x.com/i/status/1", "1")
+        settings = SimpleNamespace(platform_enabled=lambda p: True, reply_messages=True)
+
+        def slot(_uid, on_wait):
+            class CM:
+                async def __aenter__(self): return self
+                async def __aexit__(self, *_a): return False
+            return CM()
+
+        # user quota denied
+        bot = FakeBot()
+        bot.job_slots.slot = slot
+        bot.user_quota = SimpleNamespace(aclaim=AsyncMock(return_value=SimpleNamespace(allowed=False)))
+        msg = make_message("https://x.com/u/status/1", author_id=2)
+        with patch("media_bot.bot.find_links", return_value=[link]), patch("media_bot.bot.i18n.locale_for_message", return_value="tr"), patch("media_bot.bot.i18n.t", side_effect=lambda k,*a,**kw:k), patch("media_bot.bot.i18n.quota_message", return_value="quota"), patch("media_bot.bot_orchestration_mixin.SETTINGS.get", return_value=settings), patch("media_bot.bot_orchestration_mixin.REQUESTS.record", return_value=1), patch("media_bot.bot_orchestration_mixin.MAINTENANCE", SimpleNamespace(active=False, message="m")):
+            await bot.on_message(msg)
+        bot._handle_link.assert_not_awaited()
+
+        # guild quota denied
+        bot = FakeBot()
+        bot.job_slots.slot = slot
+        bot.guild_quota = SimpleNamespace(aclaim=AsyncMock(return_value=SimpleNamespace(allowed=False)))
+        msg = make_message("https://x.com/u/status/1", author_id=2)
+        with patch("media_bot.bot.find_links", return_value=[link]), patch("media_bot.bot.i18n.locale_for_message", return_value="tr"), patch("media_bot.bot.i18n.t", side_effect=lambda k,*a,**kw:k), patch("media_bot.bot.i18n.quota_message", return_value="gquota"), patch("media_bot.bot_orchestration_mixin.SETTINGS.get", return_value=settings), patch("media_bot.bot_orchestration_mixin.REQUESTS.record", return_value=1), patch("media_bot.bot_orchestration_mixin.MAINTENANCE", SimpleNamespace(active=False, message="m")):
+            await bot.on_message(msg)
+        bot._handle_link.assert_not_awaited()
+
+        # maintenance blocks non-owner
+        bot = FakeBot()
+        bot.job_slots.slot = slot
+        msg = make_message("https://x.com/u/status/1", author_id=2)
+        with patch("media_bot.bot.find_links", return_value=[link]), patch("media_bot.bot.i18n.locale_for_message", return_value="tr"), patch("media_bot.bot.i18n.t", side_effect=lambda k,*a,**kw:k), patch("media_bot.bot_orchestration_mixin.SETTINGS.get", return_value=settings), patch("media_bot.bot_orchestration_mixin.MAINTENANCE", SimpleNamespace(active=True, message="bakim")):
+            await bot.on_message(msg)
+        bot._reply.assert_awaited()
+
+        # failure adds retry view, forbidden/http/exception
+        for exc, expected in [(discord.Forbidden(SimpleNamespace(status=403, reason="f"), "f"), "forbidden"), (discord.HTTPException(SimpleNamespace(status=413, reason="big"), "big"), "http:413"), (RuntimeError("boom"), "exception")]:
+            bot = FakeBot()
+            bot.job_slots.slot = slot
+            bot._handle_link = AsyncMock(side_effect=exc)
+            msg = make_message("https://x.com/u/status/1", author_id=2)
+            with patch("media_bot.bot.find_links", return_value=[link]), patch("media_bot.bot.i18n.locale_for_message", return_value="tr"), patch("media_bot.bot.i18n.t", side_effect=lambda k,*a,**kw:k), patch("media_bot.bot_orchestration_mixin.SETTINGS.get", return_value=settings), patch("media_bot.bot_orchestration_mixin.REQUESTS.record", return_value=1), patch("media_bot.bot_orchestration_mixin.MAINTENANCE", SimpleNamespace(active=False, message="m")), patch("media_bot.bot_orchestration_mixin.RetryView", return_value=SimpleNamespace()):
+                await bot.on_message(msg)
+            self.assertTrue(bot._reply.await_count >= 1)
+
+
+
+    async def test_parallel_links_and_reply_once(self):
+        bot = FakeBot()
+        bot._reply = OrchestrationMixin._reply.__get__(bot, FakeBot)
+        bot._reply_once = OrchestrationMixin._reply_once.__get__(bot, FakeBot)
+        msg = make_message("hi")
+        msg.guild = None
+        msg.channel = SimpleNamespace(send=AsyncMock(return_value=SimpleNamespace()))
+        with patch("media_bot.bot_orchestration_mixin.SETTINGS.get", return_value=SimpleNamespace(reply_messages=False)):
+            await bot._reply_once(msg, "x", as_reply=False)
+        msg.channel.send.assert_awaited()
+
+        # parallel links
+        bot2 = FakeBot()
+        link = PostLink("x", "https://x.com/i/status/1", "1")
+        def slot(_uid, on_wait):
+            class CM:
+                async def __aenter__(self): return self
+                async def __aexit__(self, *_a): return False
+            return CM()
+        bot2.job_slots.slot = slot
+        bot2._handle_link = AsyncMock(return_value=("success", []))
+        msg2 = make_message("https://x.com/u/status/1 https://x.com/u/status/2", author_id=2)
+        with patch("media_bot.bot.find_links", return_value=[link, link]), patch("media_bot.bot.i18n.locale_for_message", return_value="tr"), patch("media_bot.bot.i18n.t", side_effect=lambda k,*a,**kw:k), patch("media_bot.bot_orchestration_mixin.SETTINGS.get", return_value=SimpleNamespace(platform_enabled=lambda p: True, reply_messages=True)), patch("media_bot.bot_orchestration_mixin.REQUESTS.record", return_value=1), patch("media_bot.bot_orchestration_mixin.MAINTENANCE", SimpleNamespace(active=False, message="m")):
+            await bot2.on_message(msg2)
+        self.assertEqual(bot2._handle_link.await_count, 2)
