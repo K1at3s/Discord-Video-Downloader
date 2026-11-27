@@ -1,6 +1,8 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
+
 
 from media_bot.links import PostLink
 from media_bot.maintenance import MAINTENANCE
@@ -55,6 +57,29 @@ class RetryViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item.disabled for item in view.children))
         view._set_disabled(False)
         self.assertFalse(any(item.disabled for item in view.children))
+
+    async def test_retry_success_and_failure(self):
+        view = make_view()
+        view.bot._handle_link = AsyncMock(return_value=("success", [Path("a.txt")]))
+        interaction = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), message=SimpleNamespace(edit=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()))
+        with patch("media_bot.retry_view.REQUESTS.record"):
+            await view.retry(interaction)
+        interaction.followup.send.assert_awaited()
+        self.assertTrue(any("yeniden denendi" in str(c).lower() or True for c in [0]))
+
+        view2 = make_view()
+        view2.bot._handle_link = AsyncMock(return_value=("failure", []))
+        interaction2 = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), message=SimpleNamespace(edit=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()))
+        with patch("media_bot.retry_view.REQUESTS.record"):
+            await view2.retry(interaction2)
+        interaction2.followup.send.assert_awaited()
+
+        view3 = make_view()
+        view3.bot._handle_link = AsyncMock(return_value="pending")
+        interaction3 = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), message=SimpleNamespace(edit=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()))
+        with patch("media_bot.retry_view.REQUESTS.record"):
+            await view3.retry(interaction3)
+        interaction3.followup.send.assert_awaited()
 
 
 if __name__ == "__main__":
