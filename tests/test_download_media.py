@@ -659,3 +659,385 @@ class DownloadMediaTests(unittest.IsolatedAsyncioTestCase):
         with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), patch("media_bot.download.HIGHLIGHTS", highlights2), patch("media_bot.download.highlight_id", return_value="1"), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p,names:list(names))), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", side_effect=exec_provider), patch("media_bot.download.media_files", side_effect=lambda folder,_m:[p for p in folder.rglob("*.mp4") if p.is_file()]):
             files, provider = await download_media(link, tmp2, 1000)
         self.assertTrue(files)
+
+    async def test_cache_follower_hit_clean(self):
+        from media_bot.download import download_media
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        cached = SimpleNamespace(provider="yt-dlp")
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(None)
+        def copy_to(_e, folder):
+            (folder / "c.mp4").write_bytes(b"v")
+        fake_cache = SimpleNamespace(
+            enabled=True, key_for=lambda p, u, c: "k", get=lambda *a, **k: cached,
+            copy_to=copy_to, singleflight_start=AsyncMock(return_value=(False, fut)),
+            singleflight_finish=AsyncMock(), put=lambda *a, **k: None,
+        )
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", fake_cache), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertEqual(provider, "yt-dlp")
+        self.assertTrue(files)
+
+    async def test_story_timeout_falls_through(self):
+        from media_bot.download import download_media
+        link = PostLink("instagram", "https://www.instagram.com/stories/user/123/", None)
+        tmp = make_tmp(self)
+        prov_dir = tmp / "indownio"
+        prov_dir.mkdir()
+        (prov_dir / "a.mp4").write_bytes(b"v")
+        highlights = SimpleNamespace(enabled=False, cache=None, bucket=SimpleNamespace(wait_seconds=lambda: 0))
+        real_wait_for = asyncio.wait_for
+
+        async def fake_wait_for(awaitable, timeout=None):
+            if timeout == 8:
+                # close coroutine to avoid warning
+                if asyncio.iscoroutine(awaitable):
+                    awaitable.close()
+                raise asyncio.TimeoutError
+            return await real_wait_for(awaitable, timeout=timeout)
+
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", highlights), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for), \
+             patch("media_bot.download._execute_provider", AsyncMock(return_value=(0, ""))), \
+             patch("media_bot.download.media_files", return_value=[prov_dir / "a.mp4"]):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertTrue(files)
+
+    async def test_highlight_leader_indown_timeout_then_success(self):
+        from media_bot.download import download_media
+        link = PostLink("instagram", "https://www.instagram.com/stories/highlights/1/", None)
+        tmp = make_tmp(self)
+        src = tmp / "indownio"
+        src.mkdir()
+        (src / "a.mp4").write_bytes(b"v")
+        hl_cache = SimpleNamespace(get=lambda *a, **k: None, copy_to=lambda *a, **k: None, singleflight_start=AsyncMock(return_value=(True, None)), singleflight_finish=AsyncMock(), put=AsyncMock())
+        bucket = SimpleNamespace(try_consume=lambda: (True, 0), wait_seconds=lambda: 60, mark_exhausted=lambda: 60)
+        highlights = SimpleNamespace(enabled=True, cache=hl_cache, user_quota=None, bucket=bucket, probe_lock=asyncio.Lock())
+        real_wait_for = asyncio.wait_for
+
+        async def fake_wait_for(awaitable, timeout=None):
+            # STORY_FIRST_TIMEOUT indown attempt
+            if timeout == 8:
+                if asyncio.iscoroutine(awaitable):
+                    awaitable.close()
+                raise asyncio.TimeoutError
+            return await real_wait_for(awaitable, timeout=timeout)
+
+        async def exec_provider(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            if name == "indownio":
+                (target / "a.mp4").write_bytes(b"v")
+                return 0, ""
+            return 1, "no media"
+
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", highlights), \
+             patch("media_bot.download.highlight_id", return_value="1"), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for), \
+             patch("media_bot.download._execute_provider", side_effect=exec_provider), \
+             patch("media_bot.download.media_files", side_effect=lambda folder, _m: [p for p in folder.rglob("*.mp4") if p.is_file()]):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertEqual(provider, "indownio")
+
+    async def test_highlight_leader_fallthrough_errors(self):
+        from media_bot.download import download_media
+        link = PostLink("instagram", "https://www.instagram.com/stories/highlights/1/", None)
+
+        async def run_case(expected, exec_behavior):
+            tmp = make_tmp(self)
+            hl_cache = SimpleNamespace(get=lambda *a, **k: None, copy_to=lambda *a, **k: None, singleflight_start=AsyncMock(return_value=(True, None)), singleflight_finish=AsyncMock(), put=AsyncMock())
+            bucket = SimpleNamespace(try_consume=lambda: (True, 0), wait_seconds=lambda: 60, mark_exhausted=lambda: 60)
+            highlights = SimpleNamespace(enabled=True, cache=hl_cache, user_quota=None, bucket=bucket, probe_lock=asyncio.Lock())
+            patches = [
+                patch("media_bot.download.ensure_free_disk"),
+                patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)),
+                patch("media_bot.download.HIGHLIGHTS", highlights),
+                patch("media_bot.download.highlight_id", return_value="1"),
+                patch("media_bot.download.highlight_post_link", return_value=None),
+                patch("media_bot.download.METRICS.record_winner"),
+                patch("media_bot.download.METRICS.record"),
+                patch("media_bot.download.BREAKERS.allow", return_value=True),
+                patch("media_bot.download.BREAKERS.success"),
+                patch("media_bot.download.BREAKERS.neutral"),
+                patch("media_bot.download.BREAKERS.failure", return_value=None),
+                patch("media_bot.download.BREAKERS.abandon"),
+                patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)),
+                patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names))),
+                patch("media_bot.download.provider_memory.hedge_seconds", return_value=0),
+                patch("media_bot.download.provider_memory.remember"),
+                patch("media_bot.download.provider_memory.forget"),
+                patch("media_bot.download._execute_provider", side_effect=exec_behavior),
+                patch("media_bot.download.media_files", return_value=[]),
+            ]
+            for p in patches:
+                p.start()
+            try:
+                with self.assertRaises(DownloadError) as ctx:
+                    await download_media(link, tmp, 1000)
+                self.assertIn(expected.lower(), str(ctx.exception).lower())
+            finally:
+                for p in patches:
+                    p.stop()
+
+        async def all_fail(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            return 1, "no media"
+
+        await run_case("medya alınamadı", all_fail)
+
+        async def private_fail(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            return 1, "login required"
+
+        await run_case("gizli", private_fail)
+
+        async def bot_fail(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            return 1, "Sign in to confirm you're not a bot"
+
+        await run_case("bot", bot_fail)
+
+        async def oversize_fail(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "big.mp4").write_bytes(b"x" * 100)
+            return 1, "too big"
+
+        # need small max_bytes
+        tmp = make_tmp(self)
+        hl_cache = SimpleNamespace(get=lambda *a, **k: None, copy_to=lambda *a, **k: None, singleflight_start=AsyncMock(return_value=(True, None)), singleflight_finish=AsyncMock(), put=AsyncMock())
+        bucket = SimpleNamespace(try_consume=lambda: (True, 0), wait_seconds=lambda: 60, mark_exhausted=lambda: 60)
+        highlights = SimpleNamespace(enabled=True, cache=hl_cache, user_quota=None, bucket=bucket, probe_lock=asyncio.Lock())
+        patches = [
+            patch("media_bot.download.ensure_free_disk"),
+            patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)),
+            patch("media_bot.download.HIGHLIGHTS", highlights),
+            patch("media_bot.download.highlight_id", return_value="1"),
+            patch("media_bot.download.highlight_post_link", return_value=None),
+            patch("media_bot.download.METRICS.record_winner"),
+            patch("media_bot.download.METRICS.record"),
+            patch("media_bot.download.BREAKERS.allow", return_value=True),
+            patch("media_bot.download.BREAKERS.success"),
+            patch("media_bot.download.BREAKERS.neutral"),
+            patch("media_bot.download.BREAKERS.failure", return_value=None),
+            patch("media_bot.download.BREAKERS.abandon"),
+            patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)),
+            patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names))),
+            patch("media_bot.download.provider_memory.hedge_seconds", return_value=0),
+            patch("media_bot.download.provider_memory.remember"),
+            patch("media_bot.download.provider_memory.forget"),
+            patch("media_bot.download._execute_provider", side_effect=oversize_fail),
+            patch("media_bot.download.media_files", return_value=[]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            with self.assertRaises(DownloadError) as ctx:
+                await download_media(link, tmp, 10)
+            self.assertIn("yükleme", str(ctx.exception).lower())
+        finally:
+            for p in patches:
+                p.stop()
+
+        async def rate_fail(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            return 1, "hourly request limit"
+
+        await run_case("kota", rate_fail)
+
+    async def test_partial_success_after_stream(self):
+        from media_bot.download import download_media
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        emitted = []
+
+        async def on_file(files):
+            emitted.extend(files)
+
+        async def exec_provider(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            f = target / "a.mp4"
+            f.write_bytes(b"video")
+            await asyncio.sleep(1.5)
+            return 1, "provider failed after write"
+
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names[:1]))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download._execute_provider", side_effect=exec_provider), \
+             patch("media_bot.download.media_files", side_effect=lambda folder, _m: [p for p in folder.rglob("*.mp4") if p.is_file()]):
+            files, provider = await download_media(link, tmp, 1000, on_file=on_file)
+        self.assertTrue(files)
+        self.assertTrue(emitted)
+
+    async def test_partial_stream_result_at_end(self):
+        from media_bot.download import download_media
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        emitted = []
+
+        async def on_file(files):
+            emitted.extend(list(files))
+
+        async def exec_provider(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            f = target / "a.mp4"
+            f.write_bytes(b"video")
+            await asyncio.sleep(1.5)
+            return 1, "fail after stream"
+
+        # media_files returns [] so attempt doesn't take success/partial-success-in-attempt path
+        # but file remains on disk for _partial_stream_result
+        with patch("media_bot.download.ensure_free_disk"), \
+             patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), \
+             patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), \
+             patch("media_bot.download.highlight_id", return_value=None), \
+             patch("media_bot.download.highlight_post_link", return_value=None), \
+             patch("media_bot.download.METRICS.record_winner"), \
+             patch("media_bot.download.METRICS.record"), \
+             patch("media_bot.download.BREAKERS.allow", return_value=True), \
+             patch("media_bot.download.BREAKERS.success"), \
+             patch("media_bot.download.BREAKERS.neutral"), \
+             patch("media_bot.download.BREAKERS.failure", return_value=None), \
+             patch("media_bot.download.BREAKERS.abandon"), \
+             patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), \
+             patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names[:1]))), \
+             patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), \
+             patch("media_bot.download.provider_memory.remember"), \
+             patch("media_bot.download.provider_memory.forget"), \
+             patch("media_bot.download._execute_provider", side_effect=exec_provider), \
+             patch("media_bot.download.media_files", return_value=[]):
+            files, provider = await download_media(link, tmp, 1000, on_file=on_file)
+        self.assertTrue(files)
+
+    async def test_download_media_end_errors(self):
+        from media_bot.download import download_media
+
+        def base_patches(link, highlights=None):
+            h = highlights or SimpleNamespace(enabled=False, cache=None, bucket=SimpleNamespace(wait_seconds=lambda: 60))
+            return [
+                patch("media_bot.download.ensure_free_disk"),
+                patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)),
+                patch("media_bot.download.HIGHLIGHTS", h),
+                patch("media_bot.download.highlight_id", return_value=None),
+                patch("media_bot.download.highlight_post_link", return_value=None),
+                patch("media_bot.download.METRICS.record_winner"),
+                patch("media_bot.download.METRICS.record"),
+                patch("media_bot.download.BREAKERS.allow", return_value=True),
+                patch("media_bot.download.BREAKERS.success"),
+                patch("media_bot.download.BREAKERS.neutral"),
+                patch("media_bot.download.BREAKERS.failure", return_value=None),
+                patch("media_bot.download.BREAKERS.abandon"),
+                patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)),
+                patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p, names: list(names[:1]))),
+                patch("media_bot.download.provider_memory.hedge_seconds", return_value=0),
+                patch("media_bot.download.provider_memory.remember"),
+                patch("media_bot.download.provider_memory.forget"),
+            ]
+
+        # Generic bot_check
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        patches = base_patches(link) + [
+            patch("media_bot.download._execute_provider", AsyncMock(return_value=(1, "Sign in to confirm you're not a bot"))),
+            patch("media_bot.download.media_files", return_value=[]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            with self.assertRaises(DownloadError) as ctx:
+                await download_media(link, tmp, 1000)
+            self.assertIn("bot", str(ctx.exception).lower())
+        finally:
+            for p in patches:
+                p.stop()
+
+        # Instagram rate limited with wait
+        link = PostLink("instagram", "https://www.instagram.com/p/abc/", "abc")
+        tmp = make_tmp(self)
+        h = SimpleNamespace(enabled=True, cache=None, bucket=SimpleNamespace(wait_seconds=lambda: 120))
+        patches = base_patches(link, highlights=h) + [
+            patch("media_bot.download._execute_provider", AsyncMock(return_value=(1, "hourly request limit"))),
+            patch("media_bot.download.media_files", return_value=[]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            with self.assertRaises(DownloadError) as ctx:
+                await download_media(link, tmp, 1000)
+            self.assertIn("instagram", str(ctx.exception).lower())
+        finally:
+            for p in patches:
+                p.stop()
+
+        # No failures - all providers skipped by breaker
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        tmp = make_tmp(self)
+        patches = base_patches(link)
+        # override breakers.allow to False
+        patches = [p for p in patches if "BREAKERS.allow" not in str(p.attribute) and "BREAKERS.allow" not in str(getattr(p, 'attribute', ''))]
+        patches = base_patches(link)
+        for p in patches:
+            p.start()
+        # manually override allow
+        import media_bot.download as dl
+        orig_allow = dl.BREAKERS.allow
+        dl.BREAKERS.allow = lambda *a, **k: False
+        try:
+            with patch("media_bot.download.media_files", return_value=[]):
+                with self.assertRaises(DownloadError) as ctx:
+                    await download_media(link, tmp, 1000)
+            self.assertIn("medya alınamadı", str(ctx.exception).lower())
+        finally:
+            dl.BREAKERS.allow = orig_allow
+            for p in patches:
+                p.stop()
