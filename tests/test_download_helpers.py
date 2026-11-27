@@ -111,3 +111,116 @@ class ExecuteProviderTests(unittest.IsolatedAsyncioTestCase):
             with patch(target_name, side_effect=slow), patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for):
                 code, _ = await _execute_provider(name, *args)
                 self.assertEqual(code, -1)
+
+
+class RunAndProviderWrapperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_wrappers_call_run(self):
+        from media_bot.download import _gallery_dl, _gallery_rs, _instaloader, _you_get, _yt_dlp
+        tmp = Path(tempfile.mkdtemp(prefix="pw-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        link = PostLink("instagram", "https://www.instagram.com/p/abc/", "abc")
+        with patch("media_bot.download._run", AsyncMock(return_value=(0, "ok"))) as run:
+            self.assertEqual(await _yt_dlp(link, tmp, 1000, None), (0, "ok"))
+            self.assertEqual(await _gallery_dl(link, tmp, 1000, None), (0, "ok"))
+            self.assertEqual(await _instaloader(link, tmp, 1000, None), (0, "ok"))
+            self.assertEqual(await _you_get(link, tmp, 1000), (0, "ok"))
+            self.assertEqual(await _gallery_rs(link, tmp, 1000, None, tmp / "grs.exe"), (0, "ok"))
+            self.assertGreaterEqual(run.await_count, 5)
+
+        # threads yt-dlp uses --yes-playlist
+        tlink = PostLink("threads", "https://www.threads.com/@u/post/ABC", "ABC")
+        with patch("media_bot.download._run", AsyncMock(return_value=(0, ""))) as run:
+            await _yt_dlp(tlink, tmp, 1000, tmp / "cookies.txt")
+            cmd = run.await_args.args[0]
+            self.assertIn("--yes-playlist", cmd)
+
+    async def test_run_success_timeout_and_cancel(self):
+        from media_bot.download import _run
+        tmp = Path(tempfile.mkdtemp(prefix="run-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+
+        class Proc:
+            def __init__(self, rc=0, stderr=b"err", wait_steps=0):
+                self.returncode = rc
+                self._stderr = stderr
+                self.killed = False
+                self.wait_steps = wait_steps
+            async def communicate(self):
+                for _ in range(self.wait_steps):
+                    await asyncio.sleep(0)
+                self.returncode = self.returncode if self.returncode is not None else 0
+                return b"", self._stderr
+            def kill(self):
+                self.killed = True
+
+        proc = Proc(rc=0, stderr=b"hello")
+        with patch("media_bot.download.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+            code, err = await _run(["echo"], timeout=5)
+        self.assertEqual(code, 0)
+        self.assertIn("hello", err)
+
+        # timeout
+        async def never_done():
+            fut = asyncio.get_running_loop().create_future()
+            return await fut
+        proc2 = Proc(rc=None)
+        async def comm():
+            await asyncio.sleep(10)
+            return b"", b"late"
+        proc2.communicate = comm
+        real_wait_for = asyncio.wait_for
+        calls = {"n": 0}
+        async def fake_wait_for(awaitable, timeout):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise asyncio.TimeoutError
+            return await real_wait_for(awaitable, timeout=timeout)
+        with patch("media_bot.download.asyncio.create_subprocess_exec", AsyncMock(return_value=proc2)), \
+             patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for), \
+             patch("media_bot.download.asyncio.get_running_loop") as grl:
+            loop = asyncio.get_running_loop()
+            grl.return_value = loop
+            # make deadline already passed on second check
+            orig_time = loop.time
+            times = iter([0.0, 10.0, 10.0, 10.0])
+            loop.time = lambda: next(times, 10.0)
+            try:
+                code, err = await _run(["x"], timeout=1)
+            finally:
+                loop.time = orig_time
+        self.assertEqual(code, -1)
+
+
+    async def test_run_max_total_bytes(self):
+        from media_bot.download import _run
+        tmp = Path(tempfile.mkdtemp(prefix="run2-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        (tmp / "big.bin").write_bytes(b"x" * 200)
+
+        class Proc:
+            returncode = None
+            killed = False
+            async def communicate(self):
+                for _ in range(200):
+                    if self.killed:
+                        self.returncode = -9
+                        return b"", b"big"
+                    await asyncio.sleep(0.01)
+                self.returncode = -9
+                return b"", b"big"
+            def kill(self):
+                self.killed = True
+
+        proc = Proc()
+        real_wait_for = asyncio.wait_for
+        calls = {"n": 0}
+        async def fake_wait_for(awaitable, timeout):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise asyncio.TimeoutError
+            return await real_wait_for(awaitable, timeout=timeout)
+        with patch("media_bot.download.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)), \
+             patch("media_bot.download.asyncio.wait_for", side_effect=fake_wait_for):
+            code, err = await _run(["x"], timeout=10, folder=tmp, max_total_bytes=10)
+        self.assertEqual(code, -1)
+        self.assertIn("sınır", err.lower())
