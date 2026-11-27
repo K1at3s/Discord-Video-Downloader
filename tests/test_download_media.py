@@ -551,3 +551,111 @@ class DownloadMediaTests(unittest.IsolatedAsyncioTestCase):
         with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False, cache=None)), patch("media_bot.download.highlight_id", return_value=None), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(return_value=["slow", "fast"])), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", side_effect=exec_provider), patch("media_bot.download.media_files", side_effect=lambda folder,_m:[p for p in folder.rglob("*.mp4") if p.is_file()]):
             files, provider = await download_media(link, tmp, 1000, on_file=on_file)
         self.assertTrue(files)
+
+
+    async def test_cache_follower_hit_and_fut_exception(self):
+        from media_bot.download import download_media
+        link = PostLink("reddit", "https://www.reddit.com/r/a/comments/abc123/c", "abc123")
+        # fut exception but cache available
+        tmp = make_tmp(self)
+        cached = SimpleNamespace(provider="yt-dlp")
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_exception(RuntimeError("boom"))
+        def copy_to(_e, folder): (folder/"c.mp4").write_bytes(b"v")
+        fake_cache = SimpleNamespace(enabled=True, key_for=lambda p,u,c:"k", get=lambda *a,**k: cached, copy_to=copy_to, singleflight_start=AsyncMock(return_value=(False,fut)), singleflight_finish=AsyncMock(), put=lambda *a,**k:None)
+        with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", fake_cache), patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False,cache=None)), patch("media_bot.download.highlight_id", return_value=None), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertEqual(provider, "yt-dlp")
+        if fut.done() and not fut.cancelled():
+            fut.exception()
+
+        # follower cache miss, fut ok, falls through already covered; fut exception and no cache falls through
+        tmp2 = make_tmp(self)
+        prov = tmp2 / "yt-dlp"
+        prov.mkdir()
+        (prov / "a.mp4").write_bytes(b"v")
+        fut2 = asyncio.get_running_loop().create_future()
+        fut2.set_exception(RuntimeError("boom"))
+        fake_cache2 = SimpleNamespace(enabled=True, key_for=lambda p,u,c:"k", get=lambda *a,**k: None, copy_to=lambda *a,**k:None, singleflight_start=AsyncMock(return_value=(False,fut2)), singleflight_finish=AsyncMock(), put=lambda *a,**k:None)
+        with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", fake_cache2), patch("media_bot.download.HIGHLIGHTS", SimpleNamespace(enabled=False,cache=None)), patch("media_bot.download.highlight_id", return_value=None), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p,names:list(names[:1]))), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", AsyncMock(return_value=(0,""))), patch("media_bot.download.media_files", return_value=[prov/"a.mp4"]):
+            files, provider = await download_media(link, tmp2, 1000)
+        self.assertTrue(files)
+        if fut2.done() and not fut2.cancelled():
+            fut2.exception()
+
+
+    async def test_highlight_probe_and_rate_limited(self):
+        from media_bot.download import download_media
+        link = PostLink("instagram", "https://www.instagram.com/stories/highlights/1/", None)
+        tmp = make_tmp(self)
+        src = tmp / "indownio"
+        src.mkdir()
+        (src/"a.mp4").write_bytes(b"v")
+        hl_cache = SimpleNamespace(get=lambda *a,**k: None, copy_to=lambda *a,**k: None, singleflight_start=AsyncMock(return_value=(True,None)), singleflight_finish=AsyncMock(), put=AsyncMock())
+        # probe: first False,100; inside lock False,100; after success maybe consume
+        consumes = iter([(False,100),(False,100),(True,0),(True,0),(True,0)])
+        bucket = SimpleNamespace(try_consume=lambda: next(consumes, (True,0)), wait_seconds=lambda: 100, mark_exhausted=lambda: 60)
+        highlights = SimpleNamespace(enabled=True, cache=hl_cache, user_quota=None, bucket=bucket, probe_lock=asyncio.Lock())
+
+        async def exec_provider(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            if name == "indown":
+                return 1, "no media"
+            (target/"a.mp4").write_bytes(b"v")
+            return 0, ""
+        with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), patch("media_bot.download.HIGHLIGHTS", highlights), patch("media_bot.download.highlight_id", return_value="1"), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p,names:list(names))), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", side_effect=exec_provider), patch("media_bot.download.media_files", side_effect=lambda folder,_m:[p for p in folder.rglob("*.mp4") if p.is_file()]):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertEqual(provider, "indownio")
+
+
+    async def test_highlight_leader_exception_releases_quota(self):
+        from media_bot.download import download_media
+        link = PostLink("instagram", "https://www.instagram.com/stories/highlights/1/", None)
+        tmp = make_tmp(self)
+        src = tmp / "indown"
+        src.mkdir()
+        (src / "a.mp4").write_bytes(b"v")
+        hl_cache = SimpleNamespace(get=lambda *a,**k: None, copy_to=lambda *a,**k: None, singleflight_start=AsyncMock(return_value=(True,None)), singleflight_finish=AsyncMock(), put=lambda *a,**k: (_ for _ in ()).throw(RuntimeError("boom")))
+        user_quota = SimpleNamespace(aclaim=AsyncMock(return_value=(True,"")), arelease=AsyncMock())
+        highlights = SimpleNamespace(enabled=True, cache=hl_cache, user_quota=user_quota, bucket=SimpleNamespace(try_consume=lambda:(True,0), wait_seconds=lambda:60, mark_exhausted=lambda:60), probe_lock=asyncio.Lock())
+        with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), patch("media_bot.download.HIGHLIGHTS", highlights), patch("media_bot.download.highlight_id", return_value="1"), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p,names:list(names))), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", AsyncMock(return_value=(0,""))), patch("media_bot.download.media_files", return_value=[src/"a.mp4"]):
+            with self.assertRaises(RuntimeError):
+                await download_media(link, tmp, 1000, user_id=5)
+        user_quota.arelease.assert_awaited()
+        hl_cache.singleflight_finish.assert_awaited()
+
+
+    async def test_highlight_follower_fut_exception_and_leader_fallthrough(self):
+        from media_bot.download import download_media
+        link = PostLink("instagram", "https://www.instagram.com/stories/highlights/1/", None)
+        # follower fut exception, no cache -> fallthrough to normal
+        tmp = make_tmp(self)
+        prov = tmp / "yt-dlp"
+        prov.mkdir()
+        (prov / "a.mp4").write_bytes(b"v")
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_exception(RuntimeError("boom"))
+        hl_cache = SimpleNamespace(get=lambda *a,**k: None, copy_to=lambda *a,**k: None, singleflight_start=AsyncMock(return_value=(False, fut)), singleflight_finish=AsyncMock(), put=AsyncMock())
+        highlights = SimpleNamespace(enabled=True, cache=hl_cache, user_quota=None, bucket=SimpleNamespace(wait_seconds=lambda:0, try_consume=lambda:(True,0), mark_exhausted=lambda:0), probe_lock=asyncio.Lock())
+        with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), patch("media_bot.download.HIGHLIGHTS", highlights), patch("media_bot.download.highlight_id", return_value="1"), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p,names:list(names[:1]))), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", AsyncMock(return_value=(0,""))), patch("media_bot.download.media_files", return_value=[prov/"a.mp4"]):
+            files, provider = await download_media(link, tmp, 1000)
+        self.assertTrue(files)
+        if fut.done() and not fut.cancelled():
+            fut.exception()
+
+        # leader no result -> fallthrough to race_providers
+        tmp2 = make_tmp(self)
+        prov2 = tmp2 / "embed"
+        prov2.mkdir()
+        (prov2 / "a.mp4").write_bytes(b"v")
+        hl_cache2 = SimpleNamespace(get=lambda *a,**k: None, copy_to=lambda *a,**k: None, singleflight_start=AsyncMock(return_value=(True, None)), singleflight_finish=AsyncMock(), put=AsyncMock())
+        highlights2 = SimpleNamespace(enabled=True, cache=hl_cache2, user_quota=None, bucket=SimpleNamespace(wait_seconds=lambda:60, try_consume=lambda:(True,0), mark_exhausted=lambda:60), probe_lock=asyncio.Lock())
+        async def exec_provider(name, _link, target, _max, *a):
+            target.mkdir(parents=True, exist_ok=True)
+            if name in {"indown", "indownio"}:
+                return 1, "no media"
+            (target/"a.mp4").write_bytes(b"v")
+            return 0, ""
+        with patch("media_bot.download.ensure_free_disk"), patch("media_bot.download.MEDIA_CACHE", SimpleNamespace(enabled=False)), patch("media_bot.download.HIGHLIGHTS", highlights2), patch("media_bot.download.highlight_id", return_value="1"), patch("media_bot.download.highlight_post_link", return_value=None), patch("media_bot.download.METRICS.record_winner"), patch("media_bot.download.METRICS.record"), patch("media_bot.download.BREAKERS.allow", return_value=True), patch("media_bot.download.BREAKERS.success"), patch("media_bot.download.BREAKERS.neutral"), patch("media_bot.download.BREAKERS.failure", return_value=None), patch("media_bot.download.BREAKERS.abandon"), patch("media_bot.download.provider_memory.preferred", AsyncMock(return_value=None)), patch("media_bot.download.provider_memory.ranked", AsyncMock(side_effect=lambda _p,names:list(names))), patch("media_bot.download.provider_memory.hedge_seconds", return_value=0), patch("media_bot.download.provider_memory.remember"), patch("media_bot.download.provider_memory.forget"), patch("media_bot.download._execute_provider", side_effect=exec_provider), patch("media_bot.download.media_files", side_effect=lambda folder,_m:[p for p in folder.rglob("*.mp4") if p.is_file()]):
+            files, provider = await download_media(link, tmp2, 1000)
+        self.assertTrue(files)
